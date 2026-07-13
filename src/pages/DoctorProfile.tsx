@@ -72,7 +72,7 @@ const DoctorProfile = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
       <title>Doctor Profile | HeartSync</title>
       <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
       
@@ -89,36 +89,36 @@ const DoctorProfile = () => {
         )}
       </AnimatePresence>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* HEADER */}
-        <header className="h-20 md:h-24 bg-white border-b border-slate-100 px-6 md:px-12 flex items-center justify-between shrink-0">
+        <header className="h-16 bg-[#111827] border-b border-white/[0.06] px-4 lg:px-6 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-4">
              <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-accent-maroon transition-all">
                <Menu className="w-6 h-6" />
              </button>
              <div>
-               <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter italic">Doctor Profile</h2>
-               <p className="hidden xs:block text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mt-1">Verified Medical Credentials</p>
+               <h2 className="text-base font-black text-white tracking-tight leading-none">Doctor Profile</h2>
+               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mt-0.5">Verified Medical Credentials</p>
              </div>
           </div>
           <button 
             onClick={() => setEditing(!editing)}
-            className={`px-4 md:px-6 py-2.5 md:py-3 rounded-xl md:rounded-2xl font-black text-[9px] md:text-[10px] uppercase tracking-widest transition-all ${
-              editing 
-                ? 'bg-slate-100 text-slate-400 hover:bg-slate-200' 
-                : 'bg-slate-900 text-white shadow-xl hover:bg-slate-800 active:scale-95'
+          className={`px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${
+              editing
+                ? 'bg-white/10 text-slate-400 hover:bg-white/5'
+                : 'bg-accent-maroon text-white hover:bg-accent-maroon/90'
             }`}
           >
             {editing ? 'Cancel' : 'Edit Profile'}
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 md:p-12 no-scrollbar">
-          <div className="max-w-4xl mx-auto space-y-8 md:space-y-10">
-            <form onSubmit={handleSave} className="space-y-8 md:space-y-10">
+        <div className="flex-1 overflow-y-auto p-5 no-scrollbar">
+          <div className="max-w-4xl mx-auto space-y-5">
+            <form onSubmit={handleSave} className="space-y-5">
               {/* HERO SECTION */}
-              <div className="bg-white rounded-[32px] md:rounded-[48px] border border-slate-100 shadow-premium p-6 md:p-10 relative overflow-hidden">
-                 <div className="absolute top-0 right-0 p-10 opacity-5 hidden sm:block">
+              <div className="bg-[#111827] rounded-2xl border border-white/[0.06] p-6 relative overflow-hidden">
+                 <div className="absolute top-0 right-0 p-8 opacity-5 hidden sm:block">
                     <HeartPulse className="w-48 h-48 text-accent-maroon" />
                  </div>
                  
@@ -148,16 +148,16 @@ const DoctorProfile = () => {
                               placeholder="Full Name"
                             />
                           ) : (
-                            <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter italic truncate">{formData.displayName || 'Dr. Medical'}</h1>
+                           <h1 className="text-2xl font-black text-white tracking-tight truncate">{formData.displayName || 'Dr. Medical'}</h1>
                           )}
                           <div className="p-1.5 bg-green-500 rounded-lg shrink-0">
                              <CheckCircle2 className="w-4 h-4 text-white" />
                           </div>
                        </div>
 
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6 leading-none">
-                          Node ID: <span className="text-accent-maroon">HS-DOC-{user?.uid.substring(0, 8).toUpperCase() || 'UNSYNCED'}</span>
-                       </p>
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 leading-none">
+                           Node ID: <span className="text-accent-maroon">HS-DOC-{user?.id?.substring(0, 8).toUpperCase() || user?.uid?.substring(0, 8).toUpperCase() || 'UNSYNCED'}</span>
+                        </p>
                        
                        <div className="flex flex-wrap justify-center md:justify-start gap-4 md:gap-6">
                           <div className="flex items-center gap-2">
@@ -190,9 +190,9 @@ const DoctorProfile = () => {
               </div>
 
               {/* DETAILS GRID */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                 <div className="bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 shadow-xl p-6 md:p-8 space-y-6 md:space-y-8">
-                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-4">Professional Record</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                 <div className="bg-[#111827] rounded-2xl border border-white/[0.06] p-5 space-y-5">
+                     <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/[0.06] pb-3">Professional Record</h3>
                     
                     <div className="space-y-6">
                       <InfoInput 
@@ -234,8 +234,8 @@ const DoctorProfile = () => {
                     </div>
                  </div>
 
-                 <div className="bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 shadow-xl p-6 md:p-8 space-y-6 md:space-y-8">
-                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-4">Contact Gateway</h3>
+                 <div className="bg-[#111827] rounded-2xl border border-white/[0.06] p-5 space-y-5">
+                     <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/[0.06] pb-3">Contact Gateway</h3>
                     
                     <div className="space-y-6">
                       <InfoInput 

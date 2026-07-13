@@ -18,13 +18,19 @@ export function validateSensorPacket(live: any): ValidatedPacket {
     }
 
     // 1. Timestamp Checker
-    const packetTimestamp = live.timestamp ? Number(live.timestamp) : Date.now();
+    // Firebase serverTimestamp() is null on first write and a number after the round-trip.
+    // Treat null / 0 / missing timestamps as "just now" to avoid rejecting live data.
+    const rawTs = live.timestamp;
+    const packetTimestamp = (rawTs && typeof rawTs === 'number' && rawTs > 1000000000000)
+      ? rawTs
+      : Date.now();
     const age = Date.now() - packetTimestamp;
-    
-    // If packet is from the future (clock skew) or too old
-    if (age < -5000 || age > MAX_PACKET_AGE_MS) {
-      return { heartRate: 0, o2: 0, temp: 0, humidity: 55, ecg: 512, timestamp: packetTimestamp, isValid: false, error: "Stale or invalid timestamp" };
+
+    // Only reject if packet is impossibly old (>30s) — not on first-read null timestamps
+    if (age > 30000) {
+      return { heartRate: 0, o2: 0, temp: 0, humidity: 55, ecg: 512, timestamp: packetTimestamp, isValid: false, error: "Stale packet (>30s)" };
     }
+
 
     // 2. Data Sanitizer
     const rawHr = Number(live.BPM ?? live.bpm ?? live.heartRate ?? live.HeartRate ?? 0);

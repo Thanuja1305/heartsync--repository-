@@ -31,13 +31,13 @@ import { startIoTSimulation } from '../services/iotService';
 const PatientDashboard = () => {
   const { user, logout, profile } = useAuth();
   const navigate = useNavigate();
-  const userId = user?.uid || "m1uph2bX7SVd9Wbyge1AMqAmq093";
+  const userId = user?.uid || '';
   const { vitals: realVitals, loading: vitalsLoading, error: vitalsError } = usePatientVitals(userId);
 
   const [vitals, setVitals] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [patientData, setPatientData] = useState<any>(null);
-  const [isSimulating, setIsSimulating] = useState(true);
+  const [isSimulating, setIsSimulating] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // Time updates
@@ -46,12 +46,23 @@ const PatientDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Background hardware simulator connection (toggle for testing)
+  // Background hardware simulator connection — only start when explicitly triggered OR no live data for 10s
   useEffect(() => {
     if (!isSimulating || !userId) return;
     const stopSimulation = startIoTSimulation(userId);
     return () => stopSimulation();
   }, [isSimulating, userId]);
+
+  // Auto-start simulation only if device is not connected after 10s
+  useEffect(() => {
+    if (!userId) return;
+    const timer = setTimeout(() => {
+      if (!realVitals || !realVitals.bpm) {
+        setIsSimulating(true);
+      }
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [userId, realVitals]);
 
   // Sync Patient profile & historical logs
   useEffect(() => {

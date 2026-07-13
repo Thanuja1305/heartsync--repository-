@@ -1,20 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Bell, 
-  AlertCircle, 
-  Clock, 
-  MapPin, 
-  ShieldCheck, 
-  Search,
-  Filter,
-  CheckCircle2,
-  XCircle,
-  ArrowRight,
-  Menu
+import {
+  Bell, AlertCircle, Clock, ShieldCheck, Search,
+  Filter, CheckCircle2, ArrowRight, Menu, X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, orderBy, onSnapshot, limit } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, limit, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import DoctorSidebar from '../components/DoctorSidebar';
 
@@ -23,163 +14,177 @@ const DoctorAlerts = () => {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
-    const q = query(
-      collection(db, 'emergencyAlerts'),
-      orderBy('detectedAt', 'desc'),
-      limit(50)
-    );
-
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAlerts(docs);
+    const q = query(collection(db, 'emergencyAlerts'), orderBy('detectedAt', 'desc'), limit(50));
+    const unsub = onSnapshot(q, snap => {
+      setAlerts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
     });
-
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
+  const unacknowledged = alerts.filter(a => !a.acknowledged).length;
+  const criticalCount = alerts.filter(a => (a.severity || '').toLowerCase() === 'critical').length;
+  const resolvedCount = alerts.filter(a => (a.status || '').toLowerCase() === 'resolved').length;
+
+  const filtered = search
+    ? alerts.filter(a =>
+        (a.patientName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (a.message || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : alerts;
+
+  const getSeverityStyles = (sev: string) => {
+    const s = (sev || '').toLowerCase();
+    if (s === 'critical') return { badge: 'bg-red-500/20 text-red-400 border border-red-500/30', icon: 'bg-red-500/20 text-red-400', dot: 'bg-red-500' };
+    if (s === 'moderate' || s === 'warning') return { badge: 'bg-orange-500/20 text-orange-400 border border-orange-500/30', icon: 'bg-orange-500/20 text-orange-400', dot: 'bg-orange-500' };
+    return { badge: 'bg-blue-500/20 text-blue-400 border border-blue-500/30', icon: 'bg-blue-500/20 text-blue-400', dot: 'bg-blue-400' };
+  };
+
+  const formatDate = (d: any) => {
+    if (!d) return '--';
+    try { return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch { return '--'; }
+  };
+
+  const handleAcknowledge = async (alertId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try { await updateDoc(doc(db, 'emergencyAlerts', alertId), { acknowledged: true, status: 'RESOLVED' }); }
+    catch (err) { console.error(err); }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex overflow-hidden">
-      <title>Alert History | HeartSync</title>
-      
-      {/* MOBILE OVERLAY */}
+    <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
+      {/* Mobile overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[80] lg:hidden"
-          />
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] lg:hidden" />
         )}
       </AnimatePresence>
 
-      <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      
-      <main className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        <header className="h-20 md:h-24 bg-white border-b border-slate-200 px-6 md:px-12 flex flex-col md:flex-row items-center justify-between shrink-0 py-4 md:py-0">
-          <div className="flex items-center gap-4 w-full md:w-auto mb-4 md:mb-0">
-             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-accent-maroon transition-all">
-                <Menu className="w-6 h-6" />
-             </button>
-             <div className="min-w-0">
-               <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter italic truncate">Emergency Logs</h2>
-               <p className="hidden md:block text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mt-1">Institutional Incident Archive</p>
-             </div>
+      <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} alertCount={unacknowledged} />
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Header */}
+        <header className="h-16 bg-[#111827] border-b border-white/[0.06] px-4 lg:px-6 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-base font-black text-white tracking-tight leading-none">Alert History</h1>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mt-0.5">Emergency Incident Archive</p>
+            </div>
           </div>
-          
-          <div className="flex items-center gap-4 w-full md:w-auto">
-             <div className="relative group flex-1 md:flex-none">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 group-focus-within:text-accent-maroon transition-colors" />
-                <input 
-                  type="text"
-                  placeholder="Filter incident logs..."
-                  className="w-full md:w-64 lg:w-80 pl-11 pr-6 py-2.5 md:py-3 bg-slate-50 border border-slate-100 rounded-xl md:rounded-2xl outline-none focus:border-accent-maroon transition-all font-bold text-sm"
-                />
-             </div>
-             <button className="p-2.5 md:p-3 bg-slate-50 border border-slate-100 rounded-xl md:rounded-2xl text-slate-400 hover:text-accent-maroon transition-all shrink-0">
-                <Filter className="w-5 h-5" />
-             </button>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search alerts..."
+                className="pl-9 pr-4 py-2 bg-[#1E293B] border border-white/[0.06] rounded-xl text-[11px] text-white placeholder-slate-600 outline-none focus:border-accent-maroon/40 transition-colors w-48 font-medium" />
+            </div>
+            <button className="p-2.5 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors">
+              <Filter className="w-4 h-4 text-slate-400" />
+            </button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 md:p-12 no-scrollbar">
-           <div className="max-w-7xl mx-auto space-y-8 md:space-y-10">
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 md:gap-8">
-                 <AlertStat label="Critical Events" value={alerts.filter(a => a.severity === 'CRITICAL').length} icon={AlertCircle} color="red" />
-                 <AlertStat label="Resolved Cases" value={alerts.filter(a => a.status === 'RESOLVED').length} icon={CheckCircle2} color="green" />
-                 <AlertStat label="Response Time" value="4m 12s" icon={Clock} className="hidden sm:flex" />
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto no-scrollbar p-5 space-y-5">
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: 'Critical Events', value: criticalCount, icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
+              { label: 'Resolved Cases', value: resolvedCount, icon: CheckCircle2, color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/20' },
+              { label: 'Pending Review', value: unacknowledged, icon: Clock, color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/20' },
+            ].map(stat => (
+              <div key={stat.label} className="bg-[#111827] rounded-2xl border border-white/[0.06] p-4 flex items-center gap-4">
+                <div className={`w-11 h-11 rounded-xl border flex items-center justify-center shrink-0 ${stat.bg}`}>
+                  <stat.icon className={`w-5 h-5 ${stat.color}`} />
+                </div>
+                <div>
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{stat.label}</p>
+                  <p className={`text-2xl font-black leading-tight ${stat.color}`}>{stat.value}</p>
+                </div>
               </div>
+            ))}
+          </div>
 
-              <div className="bg-white rounded-[32px] md:rounded-[48px] border border-slate-100 shadow-premium p-6 md:p-10">
-                 <div className="space-y-6">
-                    {loading ? (
-                      <div className="py-20 text-center animate-pulse">
-                         <div className="w-12 h-12 bg-slate-100 rounded-full mx-auto mb-4" />
-                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Scanning Grid Archives...</p>
-                      </div>
-                    ) : alerts.length > 0 ? alerts.map((alert) => (
-                      <div 
-                        key={alert.id}
-                        onClick={() => navigate(`/doctor/patient/${alert.patientId}`)}
-                        className="group flex flex-col xl:flex-row items-start xl:items-center justify-between p-6 md:p-8 bg-slate-50/50 hover:bg-white rounded-2xl md:rounded-3xl border border-transparent hover:border-slate-100 hover:shadow-xl transition-all cursor-pointer"
-                      >
-                         <div className="flex items-center gap-4 md:gap-6 mb-6 xl:mb-0 w-full xl:w-auto">
-                            <div className={`w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center text-lg md:text-xl font-black shadow-lg shrink-0 ${
-                              alert.severity === 'CRITICAL' ? 'bg-accent-maroon text-white' : 'bg-amber-500 text-white'
-                            }`}>
-                               {alert.severity === 'CRITICAL' ? '!' : '?'}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                               <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-1">
-                                  <h4 className="font-black text-slate-900 italic tracking-tighter text-base md:text-lg truncate">{alert.patientName || 'Active Node'}</h4>
-                                  <span className={`px-2 py-0.5 rounded-lg text-[7px] md:text-[8px] font-black uppercase tracking-widest ${
-                                    alert.status === 'RESOLVED' ? 'bg-green-50 text-green-600' : 'bg-accent-maroon/5 text-accent-maroon'
-                                  }`}>
-                                     {alert.status?.replace('_', ' ') || 'PENDING'}
-                                  </span>
-                               </div>
-                               <div className="flex flex-wrap gap-x-4 gap-y-2">
-                                  <div className="flex items-center gap-1.5">
-                                     <Clock className="w-3 h-3 text-slate-300 shrink-0" />
-                                     <span className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">
-                                        {new Date(alert.detectedAt).toLocaleString()}
-                                     </span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                     <AlertCircle className="w-3 h-3 text-accent-maroon opacity-50 shrink-0" />
-                                     <p className="text-[9px] md:text-[10px] font-bold text-slate-600 truncate max-w-[200px] sm:max-w-xs">{alert.aiSummary || 'Cardiac anomaly detected by neural node'}</p>
-                                  </div>
-                               </div>
-                            </div>
-                         </div>
+          {/* Alert List */}
+          <div className="bg-[#111827] rounded-2xl border border-white/[0.06] overflow-hidden">
+            <div className="px-5 py-3 border-b border-white/[0.06] flex items-center justify-between">
+              <h3 className="text-[10px] font-black text-white uppercase tracking-wider">Incident Log ({filtered.length})</h3>
+              <Bell className="w-3.5 h-3.5 text-slate-600" />
+            </div>
+            <div className="divide-y divide-white/[0.04]">
+              {loading ? (
+                Array(5).fill(0).map((_, i) => (
+                  <div key={i} className="p-4 animate-pulse flex items-center gap-4">
+                    <div className="w-10 h-10 bg-white/5 rounded-xl shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 bg-white/5 rounded w-1/3" />
+                      <div className="h-2 bg-white/5 rounded w-2/3" />
+                    </div>
+                  </div>
+                ))
+              ) : filtered.length === 0 ? (
+                <div className="py-20 text-center">
+                  <ShieldCheck className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                  <p className="text-sm font-black text-slate-600">No Incidents Archived</p>
+                  <p className="text-[10px] text-slate-700 font-bold mt-1">Perfect safety index maintained</p>
+                </div>
+              ) : filtered.map(alert => {
+                const sev = getSeverityStyles(alert.severity);
+                return (
+                  <motion.div key={alert.id} whileHover={{ backgroundColor: 'rgba(255,255,255,0.02)' }}
+                    onClick={() => alert.patientId && navigate(`/doctor/patient/${alert.patientId}`)}
+                    className="p-4 flex items-center gap-4 cursor-pointer transition-colors group">
+                    {/* Severity dot */}
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${sev.icon}`}>
+                      <AlertCircle className="w-5 h-5" />
+                    </div>
 
-                         <div className="flex items-center gap-4 md:gap-6 w-full xl:w-auto pt-6 xl:pt-0 border-t xl:border-0 border-slate-100">
-                            <div className="text-right flex-1 xl:flex-none min-w-0">
-                               <p className="text-[7px] md:text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 truncate">Impact Level</p>
-                               <p className={`text-xs md:text-sm font-black italic truncate ${alert.severity === 'CRITICAL' ? 'text-accent-maroon' : 'text-amber-500'}`}>
-                                  {alert.severity || 'UNKNOWN'}
-                               </p>
-                            </div>
-                            <button className="p-3 md:p-4 bg-white border border-slate-100 text-slate-400 rounded-xl md:rounded-2xl group-hover:bg-slate-900 group-hover:text-white group-hover:border-slate-900 transition-all shrink-0">
-                               <ArrowRight className="w-4 md:w-5 h-4 md:h-5" />
-                            </button>
-                         </div>
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <p className="text-[12px] font-black text-white truncate">{alert.patientName || 'Unknown Patient'}</p>
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded-lg ${sev.badge}`}>
+                          {(alert.severity || 'unknown').toUpperCase()}
+                        </span>
+                        {alert.acknowledged && (
+                          <span className="text-[8px] font-black px-2 py-0.5 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20">RESOLVED</span>
+                        )}
                       </div>
-                    )) : (
-                      <div className="py-16 md:py-20 text-center p-6">
-                         <ShieldCheck className="w-10 md:w-12 h-10 md:h-12 text-slate-100 mx-auto mb-4" />
-                         <h3 className="text-lg md:text-xl font-black text-slate-900 italic tracking-tighter">Zero Incidents Archived</h3>
-                         <p className="text-[10px] md:text-xs font-black text-slate-400 uppercase tracking-widest mt-2">Perfect medical safety index maintained</p>
-                      </div>
-                    )}
-                 </div>
-              </div>
-           </div>
+                      <p className="text-[10px] text-slate-500 font-medium truncate">{alert.message || 'Cardiac anomaly detected'}</p>
+                      <p className="text-[9px] text-slate-700 font-bold mt-0.5 flex items-center gap-1">
+                        <Clock className="w-2.5 h-2.5" />{formatDate(alert.detectedAt)}
+                      </p>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {!alert.acknowledged && (
+                        <button onClick={(e) => handleAcknowledge(alert.id, e)}
+                          className="px-3 py-1.5 bg-green-500/10 border border-green-500/20 text-green-400 text-[9px] font-black rounded-lg hover:bg-green-500/20 transition-colors">
+                          Resolve
+                        </button>
+                      )}
+                      <button className="p-2 bg-[#1E293B] border border-white/5 rounded-xl text-slate-600 group-hover:text-slate-300 transition-colors">
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 };
-
-const AlertStat = ({ label, value, icon: Icon, color }: any) => (
-  <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-premium flex items-center justify-between">
-    <div>
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</p>
-      <p className="text-4xl font-black text-slate-900 tracking-tighter italic">{value}</p>
-    </div>
-    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${
-      color === 'red' ? 'bg-accent-maroon text-white shadow-xl shadow-accent-maroon/20' :
-      color === 'green' ? 'bg-green-500 text-white shadow-xl shadow-green-500/20' :
-      'bg-slate-50 text-slate-300'
-    }`}>
-      <Icon className="w-7 h-7" />
-    </div>
-  </div>
-);
 
 export default DoctorAlerts;

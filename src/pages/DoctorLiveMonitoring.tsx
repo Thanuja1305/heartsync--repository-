@@ -1,273 +1,273 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Activity, 
-  Search, 
-  AlertCircle, 
-  ArrowRight,
-  TrendingUp,
-  HeartPulse,
-  Thermometer,
-  Zap,
-  Globe,
-  Loader2,
-  Menu
+import {
+  Activity, Search, AlertCircle, ArrowRight,
+  HeartPulse, Thermometer, Droplets, Menu, Zap,
+  Wifi, WifiOff, Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, rtdb } from '../lib/firebase';
+import { ref, onValue } from 'firebase/database';
+import { validateSensorPacket } from '../lib/dataValidator';
 import DoctorSidebar from '../components/DoctorSidebar';
+
+const getStatus = (v: any): 'critical' | 'warning' | 'stable' => {
+  if (!v) return 'stable';
+  const hr = v.heartRate || v.bpm || 0;
+  const o2 = v.o2 || 0;
+  if (v.isEmergency || hr > 140 || (hr > 0 && hr < 40) || (o2 > 0 && o2 < 90)) return 'critical';
+  if (hr > 100 || hr < 55 || (o2 > 0 && o2 < 95)) return 'warning';
+  return 'stable';
+};
 
 const DoctorLiveMonitoring = () => {
   const navigate = useNavigate();
   const [patients, setPatients] = useState<any[]>([]);
   const [vitalsMap, setVitalsMap] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
-    // 1. Fetch Approved Patients
-    const q = query(
-      collection(db, 'users'),
-      where('role', '==', 'patient'),
-      where('status', '==', 'approved')
-    );
-
-    const unsubscribePatients = onSnapshot(q, (snap) => {
-      const patientDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPatients(patientDocs);
+    // 1. Fetch approved patients from Firestore
+    const q = query(collection(db, 'users'), where('role', '==', 'patient'), where('status', '==', 'approved'));
+    const unsubP = onSnapshot(q, snap => {
+      setPatients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
     });
 
-    // 2. Listen to ALL liveHealthMetrics
-    const unsubscribeVitals = onSnapshot(collection(db, 'liveHealthMetrics'), (snap) => {
-      const metrics: Record<string, any> = {};
-      snap.forEach(doc => {
-        metrics[doc.id] = doc.data();
+    // 2. Firestore liveHealthMetrics (secondary, ~5s delay)
+    const unsubFS = onSnapshot(collection(db, 'liveHealthMetrics'), snap => {
+      const m: Record<string, any> = {};
+      snap.forEach(d => { m[d.id] = { ...d.data(), _source: 'firestore' }; });
+      setVitalsMap(prev => {
+        const merged = { ...prev };
+        Object.keys(m).forEach(uid => {
+          // Only overwrite if RTDB hasn't already written a fresher value
+          if (!merged[uid] || merged[uid]._source !== 'rtdb') merged[uid] = m[uid];
+        });
+        return merged;
       });
-      setVitalsMap(metrics);
     });
 
-    return () => {
-      unsubscribePatients();
-      unsubscribeVitals();
-    };
+    // 3. Firebase RTDB — real-time primary source
+    const unsubRTDB = onValue(ref(rtdb, '/users'), snapshot => {
+      if (!snapshot.exists()) return;
+      const data = snapshot.val();
+      const rtdbVitals: Record<string, any> = {};
+      Object.keys(data).forEach(uid => {
+        const node = data[uid];
+        if (!node) return;
+        const live = node.liveReading || node.livereading || node;
+        const packet = {
+          bpm: live.bpm || live.heartRate || live.BPM,
+          spo2: live.spo2 || live.SpO2 || live.o2,
+          temperature: live.temperature || live.temp || live.Temp,
+          ecg: live.ecg || live.ECG,
+          timestamp: live.timestamp || Date.now(),
+        };
+        const v = validateSensorPacket(packet);
+        if (v.isValid && v.heartRate > 0) {
+          rtdbVitals[uid] = {
+            heartRate: v.heartRate,
+            bpm: v.heartRate,
+            o2: v.o2,
+            temp: v.temp,
+            isEmergency: v.heartRate > 140 || (v.o2 > 0 && v.o2 < 90),
+            _source: 'rtdb',
+          };
+        }
+      });
+      setVitalsMap(prev => ({ ...prev, ...rtdbVitals }));
+    });
+
+    return () => { unsubP(); unsubFS(); unsubRTDB(); };
   }, []);
 
-  const criticalPatients = patients.filter(p => vitalsMap[p.id]?.isEmergency);
-  const stablePatients = patients.filter(p => !vitalsMap[p.id]?.isEmergency);
+  const filtered = useMemo(() =>
+    search ? patients.filter(p => (p.displayName || p.fullName || '').toLowerCase().includes(search.toLowerCase())) : patients,
+    [patients, search]
+  );
+
+  const criticalList = useMemo(() => filtered.filter(p => getStatus(vitalsMap[p.id]) === 'critical'), [filtered, vitalsMap]);
+  const warningList  = useMemo(() => filtered.filter(p => getStatus(vitalsMap[p.id]) === 'warning'), [filtered, vitalsMap]);
+  const stableList   = useMemo(() => filtered.filter(p => getStatus(vitalsMap[p.id]) === 'stable'), [filtered, vitalsMap]);
+  const alertCount   = criticalList.length + warningList.length;
+
+  const VitalPill = ({ value, label, color }: { value: any; label: string; color: string }) => (
+    <div className="text-center">
+      <p className={`text-sm font-black ${value ? color : 'text-slate-700'}`}>{value ?? '--'}</p>
+      <p className="text-[8px] font-black text-slate-600 uppercase">{label}</p>
+    </div>
+  );
+
+  const PatientRow = ({ patient }: { patient: any }) => {
+    const v = vitalsMap[patient.id];
+    const status = getStatus(v);
+    const isConnected = v && v.heartRate > 0;
+    const STATUS = {
+      critical: { dot: 'bg-red-500', badge: 'text-red-400 bg-red-500/10 border border-red-500/20', label: 'Critical' },
+      warning:  { dot: 'bg-orange-500', badge: 'text-orange-400 bg-orange-500/10 border border-orange-500/20', label: 'Moderate' },
+      stable:   { dot: 'bg-green-500', badge: 'text-green-400 bg-green-500/10 border border-green-500/20', label: 'Stable' },
+    }[status];
+
+    return (
+      <motion.div whileHover={{ backgroundColor: 'rgba(255,255,255,0.02)' }}
+        onClick={() => navigate(`/doctor/patient/${patient.id}`)}
+        className="flex items-center gap-4 p-4 border-b border-white/[0.04] last:border-0 cursor-pointer group transition-colors">
+        {/* Avatar + status dot */}
+        <div className="relative shrink-0">
+          <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-white font-black text-sm border border-white/10 overflow-hidden">
+            {patient.photoURL
+              ? <img src={patient.photoURL} alt="" className="w-full h-full object-cover" />
+              : (patient.displayName || patient.fullName || 'P').charAt(0).toUpperCase()}
+          </div>
+          <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#111827] ${STATUS.dot} ${status === 'critical' ? 'animate-pulse' : ''}`} />
+        </div>
+
+        {/* Name + ID */}
+        <div className="flex-1 min-w-0">
+          <p className="text-[12px] font-black text-white truncate">{patient.displayName || patient.fullName || 'Patient'}</p>
+          <p className="text-[9px] font-bold text-slate-600">HS-{patient.id.slice(-4).toUpperCase()} • {patient.age ? `${patient.age}y` : '--'} • {patient.gender || '--'}</p>
+        </div>
+
+        {/* Vitals */}
+        <div className="hidden md:flex items-center gap-6">
+          <VitalPill value={v?.heartRate ? `${v.heartRate} BPM` : null} label="Heart Rate" color="text-red-400" />
+          <VitalPill value={v?.o2 ? `${v.o2}%` : null} label="SpO₂" color="text-blue-400" />
+          <VitalPill value={v?.temp ? `${Number(v.temp).toFixed(1)}°C` : null} label="Temp" color="text-orange-400" />
+        </div>
+
+        {/* Status badge */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className={`text-[9px] font-black px-2.5 py-1 rounded-lg ${STATUS.badge}`}>{STATUS.label}</span>
+          {isConnected
+            ? <Wifi className="w-3.5 h-3.5 text-green-500" />
+            : <WifiOff className="w-3.5 h-3.5 text-slate-700" />}
+          <button className="p-1.5 bg-[#1E293B] border border-white/5 rounded-lg text-slate-600 group-hover:text-white group-hover:border-accent-maroon/20 transition-colors">
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </motion.div>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex overflow-hidden">
-      <title>Live Telemetry | HeartSync</title>
-      
-      {/* MOBILE OVERLAY */}
+    <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
       <AnimatePresence>
         {isSidebarOpen && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[80] lg:hidden"
-          />
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] lg:hidden" />
         )}
       </AnimatePresence>
 
-      <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      
-      <main className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        <header className="h-20 md:h-24 bg-white border-b border-slate-200 px-6 md:px-12 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4">
-             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-accent-maroon transition-all">
-                <Menu className="w-6 h-6" />
-             </button>
-             <div>
-               <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter italic">Live Telemetry</h2>
-               <p className="hidden md:block text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mt-1">Real-time Biometric Stream Processing</p>
-             </div>
+      <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} alertCount={alertCount} />
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Header */}
+        <header className="h-16 bg-[#111827] border-b border-white/[0.06] px-4 lg:px-6 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-base font-black text-white tracking-tight leading-none">Live Telemetry</h1>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mt-0.5">Real-time biometric stream</p>
+            </div>
           </div>
-          
-          <div className="flex items-center gap-3 md:gap-6">
-             <div className="flex items-center gap-2 px-3 md:px-4 py-1.5 md:py-2 bg-slate-900 rounded-lg md:rounded-xl">
-                <div className="w-1.5 md:w-2 h-1.5 md:h-2 bg-medical-red rounded-full animate-pulse" />
-                <span className="text-[8px] md:text-[9px] font-black text-white uppercase tracking-widest shrink-0">Live Sync</span>
-             </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+              <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+              <span className="text-[9px] font-black text-red-400 uppercase tracking-widest">Live Sync</span>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
+                className="pl-9 pr-4 py-2 bg-[#1E293B] border border-white/[0.06] rounded-xl text-[11px] text-white placeholder-slate-600 outline-none focus:border-accent-maroon/40 w-40 font-medium" />
+            </div>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 md:p-12 no-scrollbar">
-           <div className="max-w-7xl mx-auto space-y-10 md:space-y-12">
-              
-              {/* CRITICAL ALERTS SECTION */}
-              <AnimatePresence>
-                {criticalPatients.length > 0 && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="space-y-6"
-                  >
-                     <div className="flex items-center gap-3">
-                        <AlertCircle className="w-5 h-5 text-accent-maroon" />
-                        <h3 className="text-xs md:text-sm font-black text-slate-900 uppercase tracking-[0.15em] md:tracking-[0.2em]">Immediate Action Required</h3>
-                        <div className="flex-1 h-px bg-slate-200" />
-                     </div>
-
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                        {criticalPatients.map((p) => (
-                          <CriticalCard 
-                            key={p.id} 
-                            patient={p} 
-                            vitals={vitalsMap[p.id]} 
-                            onClick={() => navigate(`/doctor/patient/${p.id}`)} 
-                          />
-                        ))}
-                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* STABLE FEED SECTION */}
-              <div className="space-y-6 md:space-y-8">
-                 <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                       <Zap className="w-5 h-5 text-green-500" />
-                       <h3 className="text-xs md:text-sm font-black text-slate-900 uppercase tracking-[0.15em] md:tracking-[0.2em]">Stream Nodes</h3>
-                    </div>
-                    <div className="px-3 md:px-4 py-1.5 md:py-2 bg-white rounded-xl border border-slate-100 shadow-sm text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest shrink-0 text-center">
-                       {stablePatients.length} Connected
-                    </div>
-                 </div>
-
-                 <div className="bg-white rounded-[32px] md:rounded-[48px] border border-slate-100 shadow-premium overflow-hidden">
-                    <div className="overflow-x-auto">
-                       <table className="w-full text-left border-collapse">
-                          <thead>
-                             <tr className="bg-slate-50/50">
-                                <th className="px-6 md:px-10 py-5 md:py-6 text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Patient Identity</th>
-                                <th className="px-6 md:px-10 py-5 md:py-6 text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Cardiac Status</th>
-                                <th className="px-6 md:px-10 py-5 md:py-6 text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Oxygen Sat.</th>
-                                <th className="px-6 md:px-10 py-5 md:py-6 text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Core Temp</th>
-                                <th className="px-6 md:px-10 py-5 md:py-6 text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Link</th>
-                             </tr>
-                          </thead>
-                          <tbody>
-                             {loading ? (
-                                <tr>
-                                   <td colSpan={5} className="py-16 md:py-20 text-center">
-                                      <Loader2 className="w-8 md:w-10 h-8 md:h-10 text-slate-200 animate-spin mx-auto mb-4" />
-                                      <p className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest">Scanning Grid Nodes...</p>
-                                   </td>
-                                </tr>
-                             ) : stablePatients.map((p) => {
-                                const v = vitalsMap[p.id];
-                                return (
-                                  <tr 
-                                    key={p.id} 
-                                    onClick={() => navigate(`/doctor/patient/${p.id}`)}
-                                    className="group border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-all cursor-pointer"
-                                  >
-                                     <td className="px-6 md:px-10 py-5 md:py-6 min-w-[200px]">
-                                        <div className="flex items-center gap-3 md:gap-4">
-                                           <div className="w-10 h-10 md:w-12 md:h-12 bg-slate-900 rounded-xl md:rounded-2xl flex items-center justify-center text-white font-black overflow-hidden shadow-lg shrink-0">
-                                              {p.photoURL ? <img src={p.photoURL} alt="" className="w-full h-full object-cover" /> : p.displayName?.charAt(0)}
-                                           </div>
-                                           <div className="min-w-0">
-                                              <p className="text-sm font-black text-slate-900 tracking-tight italic truncate">{p.displayName || 'Active Node'}</p>
-                                              <p className="text-[8px] md:text-[9px] font-black text-green-500 uppercase tracking-widest">Signal Locked</p>
-                                           </div>
-                                        </div>
-                                     </td>
-                                     <td className="px-6 md:px-10 py-5 md:py-6 whitespace-nowrap">
-                                        <div className="flex items-center gap-3">
-                                           <HeartPulse className="w-4 h-4 text-accent-maroon opacity-40" />
-                                           <span className="font-black text-slate-900 italic text-sm md:text-base">{v?.heartRate || '--'} <span className="text-[9px] md:text-[10px] font-bold text-slate-400 not-italic uppercase">BPM</span></span>
-                                        </div>
-                                     </td>
-                                     <td className="px-6 md:px-10 py-5 md:py-6 whitespace-nowrap">
-                                        <div className="flex items-center gap-3">
-                                           <Activity className="w-4 h-4 text-blue-400 opacity-40" />
-                                           <span className="font-black text-slate-900 italic text-sm md:text-base">{v?.o2 || '--'} <span className="text-[9px] md:text-[10px] font-bold text-slate-400 not-italic">%</span></span>
-                                        </div>
-                                     </td>
-                                     <td className="px-6 md:px-10 py-5 md:py-6 whitespace-nowrap">
-                                        <div className="flex items-center gap-3">
-                                           <Thermometer className="w-4 h-4 text-amber-400 opacity-40" />
-                                           <span className="font-black text-slate-900 italic text-sm md:text-base">{v?.temp?.toFixed(1) || '--'} <span className="text-[9px] md:text-[10px] font-bold text-slate-400 not-italic uppercase">°C</span></span>
-                                        </div>
-                                     </td>
-                                     <td className="px-6 md:px-10 py-5 md:py-6">
-                                        <button className="p-2.5 md:p-3 bg-white border border-slate-100 text-slate-400 rounded-xl group-hover:bg-accent-maroon group-hover:text-white group-hover:border-accent-maroon transition-all">
-                                           <ArrowRight className="w-4 h-4" />
-                                        </button>
-                                     </td>
-                                  </tr>
-                                );
-                             })}
-                             {!loading && stablePatients.length === 0 && (
-                               <tr>
-                                  <td colSpan={5} className="py-16 text-center">
-                                     <p className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest">No active stream nodes detected</p>
-                                  </td>
-                               </tr>
-                             )}
-                          </tbody>
-                       </table>
-                    </div>
-                 </div>
+        <div className="flex-1 overflow-y-auto no-scrollbar p-5 space-y-4">
+          {/* Stats row */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: 'Monitoring', value: patients.length, color: 'text-blue-400', icon: Activity, bg: 'bg-blue-500/10 border-blue-500/20' },
+              { label: 'Critical', value: criticalList.length, color: 'text-red-400', icon: AlertCircle, bg: 'bg-red-500/10 border-red-500/20' },
+              { label: 'Moderate', value: warningList.length, color: 'text-orange-400', icon: HeartPulse, bg: 'bg-orange-500/10 border-orange-500/20' },
+              { label: 'Stable', value: stableList.length, color: 'text-green-400', icon: Zap, bg: 'bg-green-500/10 border-green-500/20' },
+            ].map(s => (
+              <div key={s.label} className="bg-[#111827] rounded-2xl border border-white/[0.06] p-4 flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${s.bg}`}>
+                  <s.icon className={`w-5 h-5 ${s.color}`} />
+                </div>
+                <div>
+                  <p className="text-[8px] font-black text-slate-500 uppercase tracking-wider leading-none">{s.label}</p>
+                  <p className={`text-xl font-black leading-tight ${s.color}`}>{s.value}</p>
+                </div>
               </div>
-           </div>
+            ))}
+          </div>
+
+          {/* Critical alerts */}
+          <AnimatePresence>
+            {criticalList.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="bg-red-500/5 border border-red-500/20 rounded-2xl overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-red-500/10 flex items-center gap-2">
+                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                  <p className="text-[9px] font-black text-red-400 uppercase tracking-widest">⚠ Immediate Action Required — {criticalList.length} Critical Patient{criticalList.length > 1 ? 's' : ''}</p>
+                </div>
+                <div className="divide-y divide-red-500/10">
+                  {criticalList.map(p => <PatientRow key={p.id} patient={p} />)}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Warning section */}
+          {warningList.length > 0 && (
+            <div className="bg-[#111827] rounded-2xl border border-orange-500/10 overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-white/[0.04] flex items-center gap-2">
+                <div className="w-2 h-2 bg-orange-500 rounded-full" />
+                <p className="text-[9px] font-black text-orange-400 uppercase tracking-widest">Moderate Risk Patients ({warningList.length})</p>
+              </div>
+              <div className="divide-y divide-white/[0.04]">
+                {warningList.map(p => <PatientRow key={p.id} patient={p} />)}
+              </div>
+            </div>
+          )}
+
+          {/* Stable stream */}
+          <div className="bg-[#111827] rounded-2xl border border-white/[0.06] overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-white/[0.04] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="w-3.5 h-3.5 text-green-500" />
+                <p className="text-[9px] font-black text-green-400 uppercase tracking-widest">Stable Patients ({stableList.length})</p>
+              </div>
+              <span className="text-[8px] font-black text-slate-600 uppercase">All vitals normal</span>
+            </div>
+            {loading ? (
+              <div className="py-16 text-center">
+                <Loader2 className="w-8 h-8 text-slate-700 animate-spin mx-auto mb-3" />
+                <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Scanning nodes...</p>
+              </div>
+            ) : stableList.length === 0 && !loading ? (
+              <div className="py-12 text-center">
+                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">No stable patients right now</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-white/[0.04]">
+                {stableList.map(p => <PatientRow key={p.id} patient={p} />)}
+              </div>
+            )}
+          </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 };
-
-const CriticalCard = ({ patient, vitals, onClick }: any) => (
-  <motion.div 
-    whileHover={{ scale: 1.02 }}
-    whileTap={{ scale: 0.98 }}
-    onClick={onClick}
-    className="bg-white rounded-[40px] border-4 border-accent-maroon/20 shadow-2xl p-8 cursor-pointer group relative overflow-hidden"
-  >
-     <div className="absolute top-0 left-0 w-full h-1 bg-accent-maroon" />
-     <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-4">
-           <div className="w-16 h-16 bg-slate-900 rounded-3xl flex items-center justify-center text-white text-2xl font-black overflow-hidden shadow-2xl border-4 border-accent-maroon/10">
-              {patient.photoURL ? <img src={patient.photoURL} alt="" className="w-full h-full object-cover" /> : patient.displayName?.charAt(0)}
-           </div>
-           <div>
-              <h4 className="text-xl font-black text-slate-900 italic tracking-tighter">{patient.displayName}</h4>
-              <div className="flex items-center gap-2">
-                 <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
-                 <span className="text-[9px] font-black text-accent-maroon uppercase tracking-widest">Abnormal Vitals Detected</span>
-              </div>
-           </div>
-        </div>
-        <div className="text-right">
-           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Impact Level</p>
-           <span className="px-3 py-1 bg-accent-maroon text-white text-[9px] font-black uppercase tracking-widest rounded-lg">Critical</span>
-        </div>
-     </div>
-
-     <div className="grid grid-cols-2 gap-6 pt-8 border-t border-slate-50">
-        <div className="p-4 bg-accent-maroon/5 rounded-2xl border border-accent-maroon/10">
-           <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Heart Rate</p>
-           <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-accent-maroon">{vitals?.heartRate}</span>
-              <span className="text-[10px] font-bold text-slate-400">BPM</span>
-           </div>
-        </div>
-        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 group-hover:bg-accent-maroon transition-all group-hover:text-white flex items-center justify-between">
-           <div className="group-hover:text-white">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-white/60">Oxygen</p>
-              <p className="text-xl font-black italic">{vitals?.o2}%</p>
-           </div>
-           <ArrowRight className="w-5 h-5 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0" />
-        </div>
-     </div>
-  </motion.div>
-);
 
 export default DoctorLiveMonitoring;
