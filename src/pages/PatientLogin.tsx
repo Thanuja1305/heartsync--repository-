@@ -34,11 +34,11 @@ const PatientLogin = () => {
   React.useEffect(() => {
     if (!authLoading && user) {
       if (profile?.role === 'patient') {
-        navigate('/patient-dashboard');
+        navigate('/patient/dashboard');
       } else if (profile?.role === 'doctor') {
         const status = profile.roleProfile?.verification_status || 'pending';
         if (status === 'approved') {
-          navigate('/doctor-dashboard');
+          navigate('/doctor/dashboard');
         } else {
           navigate('/doctor-verification-pending');
         }
@@ -203,6 +203,13 @@ const PatientLogin = () => {
               </p>
             </div>
           )}
+
+          {/* Demo Credentials Box */}
+          <div className="mb-6 p-4 bg-accent-maroon/5 border border-accent-maroon/10 rounded-2xl">
+            <p className="text-[10px] font-black text-accent-maroon uppercase tracking-widest mb-1">Demo Access Credentials</p>
+            <p className="text-xs font-bold text-slate-700">Email: <span className="font-mono text-accent-maroon">patient@heartsync.com</span></p>
+            <p className="text-xs font-bold text-slate-700">Password: <span className="font-mono text-accent-maroon">patient123</span></p>
+          </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-2">

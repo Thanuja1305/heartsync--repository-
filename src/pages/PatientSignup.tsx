@@ -58,7 +58,7 @@ const PatientSignup = () => {
         allergies,
         familyHistory
       });
-      navigate('/patient-dashboard');
+      navigate('/patient/dashboard');
     } catch (err: any) {
       setError(err.message || 'Signup registration rejected.');
     } finally {
@@ -363,7 +363,7 @@ const PatientSignup = () => {
           <div className="mt-8 text-center">
             <p className="text-xs font-bold text-slate-400">
               Already have a Patient node?{' '}
-              <Link to="/patient-login" className="text-accent-maroon hover:underline font-black uppercase tracking-wider">Login Here</Link>
+              <Link to="/patient/login" className="text-accent-maroon hover:underline font-black uppercase tracking-wider">Login Here</Link>
             </p>
           </div>
         </div>

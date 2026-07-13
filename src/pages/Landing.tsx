@@ -32,14 +32,7 @@ const Landing = () => {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
 
-  // Redirection logic for authenticated users
-  useEffect(() => {
-    if (user && profile?.role) {
-      if (profile.role === 'admin') navigate('/admin');
-      else if (profile.role === 'patient') navigate('/patient-dashboard');
-      else if (profile.role === 'doctor') navigate('/doctor-dashboard');
-    }
-  }, [user, profile, navigate]);
+  // Redirection logic for authenticated users is disabled to allow home/landing page to load first.
 
   // Fluctuating real-time state variables
   const [isBeating, setIsBeating] = useState(false);

@@ -25,6 +25,7 @@ const DoctorSidebar: React.FC<DoctorSidebarProps> = ({ isOpen, setIsOpen }) => {
   const location = useLocation();
 
   const navItems = [
+    { id: 'overview', label: 'Overview', icon: HeartPulse, path: '/doctor/dashboard' },
     { id: 'live-monitoring', label: 'Live Telemetry', icon: Activity, path: '/doctor/live-monitoring' },
     { id: 'patients', label: 'Patient Registry', icon: Users, path: '/doctor/patients' },
     { id: 'alerts', label: 'Alert History', icon: Bell, path: '/doctor/alerts' },

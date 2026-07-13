@@ -4,6 +4,7 @@ import { Heart } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NetworkProvider } from './context/NetworkContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Lazy load components
 import Landing from './pages/Landing';
@@ -61,20 +62,15 @@ export default function App() {
             
             <Route path="/auth" element={<RoleSelection />} />
             <Route path="/select-role" element={<Navigate to="/auth" replace />} />
-            <Route path="/patient-login" element={<PatientLogin />} />
-            <Route path="/patient-signup" element={<PatientSignup />} />
-            <Route path="/doctor-login" element={<DoctorLogin />} />
-            <Route path="/doctor-signup" element={<DoctorSignup />} />
-            <Route path="/patient-dashboard" element={
-              <ProtectedRoute accessRole="patient">
-                <PatientDashboard />
-              </ProtectedRoute>
-            } />
-            <Route path="/doctor-dashboard" element={
-              <ProtectedRoute accessRole="doctor">
-                <DoctorDashboard />
-              </ProtectedRoute>
-            } />
+            <Route path="/patient-login" element={<Navigate to="/patient/login" replace />} />
+            <Route path="/patient-signup" element={<Navigate to="/patient/signup" replace />} />
+            <Route path="/doctor-login" element={<Navigate to="/doctor/login" replace />} />
+            <Route path="/doctor-signup" element={<Navigate to="/doctor/signup" replace />} />
+            <Route path="/patient-dashboard" element={<Navigate to="/patient/dashboard" replace />} />
+            <Route path="/doctor-dashboard" element={<Navigate to="/doctor/dashboard" replace />} />
+
+            <Route path="/patient/signup" element={<PatientSignup />} />
+            <Route path="/doctor/signup" element={<DoctorSignup />} />
             <Route path="/doctor-verification-pending" element={
               <ProtectedRoute>
                 <PendingApproval />

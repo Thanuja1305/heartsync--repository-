@@ -23,50 +23,51 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; accessRole?: 'patien
     );
   }
 
+  // If not logged in, allow auth pages, otherwise redirect to /auth
   if (!user) {
-    return <Navigate to="/auth" replace />;
-  }
-
-  // If user is at role selection, let them be there if they don't have a role
-  if (path === '/auth' || path === '/select-role') {
-    if (profile?.role) {
-      return <Navigate to="/" replace />;
+    if (path.startsWith('/doctor/login') || path.startsWith('/patient/login') || path.startsWith('/patient/signup') || path.startsWith('/doctor/signup') || path === '/' || path === '/auth' || path === '/signup') {
+      return <>{children}</>;
     }
-    return <>{children}</>;
-  }
-
-  // If user has no role, force role selection
-  if (!profile?.role && path !== '/auth' && path !== '/select-role') {
     return <Navigate to="/auth" replace />;
   }
 
-  // Role checking
-  if (accessRole && profile?.role !== accessRole) {
-    return <Navigate to="/" replace />;
+  // User is authenticated
+  const role = profile?.role;
+
+  // 1. Check if user is accessing onboarding/registration or verification pending
+  const isOnboarding = path === '/patient/onboarding' || path === '/doctor/registration' || path === '/doctor-verification-pending' || path === '/pending-approval';
+
+  // 2. Prevent cross-access & wrong URL manual entry redirection
+  if (role === 'patient') {
+    if (path.startsWith('/doctor') || path.startsWith('/doctor-') || path === '/admin') {
+      return <Navigate to="/patient/dashboard" replace />;
+    }
+  } else if (role === 'doctor') {
+    if (path.startsWith('/patient') || path.startsWith('/patient-') || path === '/admin') {
+      return <Navigate to="/doctor/dashboard" replace />;
+    }
+  } else if (role === 'admin') {
+    if (path.startsWith('/patient') || path.startsWith('/doctor')) {
+      return <Navigate to="/admin" replace />;
+    }
   }
 
-  // Role-based access control
-  const isOnboarding = path === '/patient/onboarding' || path === '/doctor/registration';
-  
-  if (profile?.role === 'admin' && profile?.status === 'pending' && !isOnboarding) {
-    return <Navigate to="/pending-approval" replace />;
+  // 3. Prevent accessing general/auth pages while logged in
+  if (path === '/' || path === '/auth' || path === '/select-role' || path.includes('/login') || path === '/signup') {
+    if (role === 'patient') {
+      return <Navigate to="/patient/dashboard" replace />;
+    } else if (role === 'doctor') {
+      return <Navigate to="/doctor/dashboard" replace />;
+    } else if (role === 'admin') {
+      return <Navigate to="/admin" replace />;
+    }
   }
 
-  if (profile?.status === 'approved' && path === '/pending-approval') {
-    return <Navigate to="/" replace />;
-  }
-
-  if (profile?.role === 'patient' && (path.startsWith('/doctor') || path.startsWith('/doctor-')) && !path.startsWith(`/doctor/patient/${user.uid}`)) {
-    return <Navigate to="/" replace />;
-  }
-
-  if (profile?.role === 'doctor' && (path.startsWith('/patient') || path.startsWith('/patient-'))) {
-    return <Navigate to="/" replace />;
-  }
-
-  // If user is at a generic path or other, redirect to home if needed
-  if (path === '/signup') {
-    return <Navigate to="/" replace />;
+  // 4. Specific role checking for route guards
+  if (accessRole && role !== accessRole) {
+    if (role === 'patient') return <Navigate to="/patient/dashboard" replace />;
+    if (role === 'doctor') return <Navigate to="/doctor/dashboard" replace />;
+    if (role === 'admin') return <Navigate to="/admin" replace />;
   }
 
   return <>{children}</>;

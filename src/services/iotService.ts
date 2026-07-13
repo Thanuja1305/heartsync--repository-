@@ -1,6 +1,7 @@
 import { ref, set, onValue, serverTimestamp as rtdbTimestamp } from "firebase/database";
 import { doc, setDoc, serverTimestamp as firestoreTimestamp } from "firebase/firestore";
 import { db, rtdb } from "../lib/firebase";
+import { supabase } from "../lib/supabase";
 
 // This service simulates the IoT hardware (Arduino + ESP8266) flow
 // In a real scenario, the Arduino would be writing to these RTDB paths directly.
@@ -130,6 +131,22 @@ export const startIoTSimulation = (patientId: string) => {
         verifiedBy: null,
         verifiedAt: null
       }, { merge: true });
+
+      // Persist in Supabase SQL alerts table
+      supabase.from('patients').select('id').eq('user_id', patientId).maybeSingle().then(({ data: pRec }) => {
+        if (pRec) {
+          supabase.from('alerts').insert({
+            patient_id: pRec.id,
+            alert_type: 'CRITICAL_VITALS',
+            severity: 'emergency',
+            message: `Emergency detected: BPM ${hr.toFixed(0)}, SpO2 ${spo2.toFixed(1)}%`,
+            triggered_value: { heartRate: hr, spo2: spo2, temp: temp },
+            status: 'active'
+          }).then(({ error }) => {
+            if (error) console.error("Supabase alert insertion error:", error);
+          });
+        }
+      });
     }
   };
 

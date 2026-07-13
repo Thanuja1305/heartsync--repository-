@@ -399,7 +399,7 @@ const DoctorSignup = () => {
           <div className="mt-8 text-center">
             <p className="text-xs font-bold text-slate-400">
               Already registered?{' '}
-              <Link to="/doctor-login" className="text-accent-maroon hover:underline font-black uppercase tracking-wider">Login Here</Link>
+              <Link to="/doctor/login" className="text-accent-maroon hover:underline font-black uppercase tracking-wider">Login Here</Link>
             </p>
           </div>
         </div>

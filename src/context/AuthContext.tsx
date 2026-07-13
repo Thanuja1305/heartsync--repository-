@@ -3,6 +3,9 @@ import { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useNetwork } from './NetworkContext';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { db, rtdb } from '../lib/firebase';
+import { doc, setDoc, collection } from 'firebase/firestore';
+import { ref, set } from 'firebase/database';
 
 interface ToastType {
   message: string;
@@ -21,6 +24,16 @@ interface UserProfile {
   uid?: string; // Add uid for backwards compatibility with some components
   displayName?: string | null; // Backwards compatibility
   roleProfile?: any; // Sub-profile info (patient_profiles or doctor_profiles)
+  fullName?: string | null;
+  photoURL?: string | null;
+  specialization?: string | null;
+  hospitalName?: string | null;
+  experience?: string | null;
+  phoneNumber?: string | null;
+  gender?: string | null;
+  qualification?: string | null;
+  availability?: string | null;
+  location?: string | null;
 }
 
 interface AuthContextType {
@@ -126,12 +139,292 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await supabase.auth.signOut();
   };
 
-  const login = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      console.error("Login Error:", error);
-      throw new Error(error.message);
+  const seedDemoPatientData = async (uid: string, doctorUid?: string) => {
+    try {
+      // 1. Seed liveHealthMetrics document in Firestore
+      await setDoc(doc(db, 'liveHealthMetrics', uid), {
+        heartRate: 74,
+        o2: 98,
+        temp: 36.8,
+        status: 'Optimal',
+        timestamp: new Date().toISOString(),
+        isEmergency: false
+      }, { merge: true });
+
+      // 2. Seed patients document in Firestore
+      await setDoc(doc(db, 'patients', uid), {
+        fullName: 'Sarah Jenkins',
+        age: 38,
+        gender: 'Female',
+        bloodGroup: 'O-Positive',
+        emergencyContact: 'Robert Jenkins (Spouse)',
+        emergencyPhone: '+1 (555) 048-1921',
+        medicalHistory: 'Chronic hypertension, minor mitral valve prolapse',
+        onboardingCompleted: true,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      // 3. Seed patientHistory logs in Firestore
+      const logsColl = collection(db, 'patientHistory', uid, 'logs');
+      const logs = [
+        { status: 'Optimal sinus rhythm', timestamp: new Date(Date.now() - 3600000).toISOString() },
+        { status: 'Elevated heart rate', timestamp: new Date(Date.now() - 14400000).toISOString() },
+        { status: 'Normal resting rhythm', timestamp: new Date(Date.now() - 86400000).toISOString() }
+      ];
+      for (const log of logs) {
+        await setDoc(doc(logsColl), log);
+      }
+
+      // 4. Seed RTDB
+      await set(ref(rtdb, `/users/${uid}`), {
+        bpm: 74,
+        spo2: 98,
+        temperature: 36.8,
+        humidity: 52,
+        ecg: [512, 520, 530, 510, 480, 512, 550, 600, 450, 512, 512, 512, 515, 520, 512]
+      });
+
+      // 5. Seed Firestore users document with assignment
+      await setDoc(doc(db, 'users', uid), {
+        uid: uid,
+        email: 'patient@heartsync.com',
+        displayName: 'Sarah Jenkins',
+        fullName: 'Sarah Jenkins',
+        role: 'patient',
+        status: 'approved',
+        onboarded: true,
+        onboardingCompleted: true,
+        doctorId: doctorUid || null, // ASSIGN TO DOCTOR
+        age: 38,
+        gender: 'Female',
+        bloodGroup: 'O-Positive',
+        phone: '+1 (555) 048-1920',
+        emergencyContact: 'Robert Jenkins (Spouse) - +1 (555) 048-1921'
+      }, { merge: true });
+
+      console.log("Successfully seeded demo patient data!");
+    } catch (e) {
+      console.error("Error seeding demo patient data:", e);
     }
+  };
+
+  const login = async (email: string, password: string) => {
+    // Trim and normalize email for robust matching
+    const normalizedEmail = email.trim().toLowerCase();
+    
+    // Check if this is a demo login request
+    const isDoctorDemo = normalizedEmail === 'doctor@heartsync.demo' || normalizedEmail === 'doctor@heartsync.com';
+    const isPatientDemo = normalizedEmail === 'patient@heartsync.demo' || normalizedEmail === 'patient@heartsync.com';
+    
+    let supabasePassword = password;
+    if (normalizedEmail === 'doctor@heartsync.com' && password === 'doctor123') {
+      supabasePassword = 'Doctor@123!';
+    } else if (normalizedEmail === 'patient@heartsync.com' && password === 'patient123') {
+      supabasePassword = 'Patient@123!';
+    } else if (normalizedEmail === 'doctor@heartsync.demo' && password === 'Doctor@123') {
+      supabasePassword = 'Doctor@123!';
+    } else if (normalizedEmail === 'patient@heartsync.demo' && password === 'Patient@123') {
+      supabasePassword = 'Patient@123!';
+    }
+
+    let result = null;
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
+      if (error) throw error;
+      result = data;
+    } catch (error: any) {
+      // If it fails and it's a demo account, let's auto-create it!
+      if (isDoctorDemo && (password === 'Doctor@123' || password === 'doctor123')) {
+        console.info("[DEMO SEEDING] Initializing Doctor Demo Account...");
+        const doctorName = normalizedEmail === 'doctor@heartsync.com' ? 'Dr. Demo Heart Specialist' : 'Dr. Alexander Heartwise';
+        try {
+          await signupDoctor(normalizedEmail, supabasePassword, {
+            fullName: doctorName,
+            phone: '+1 (555) 019-2834',
+            age: 45,
+            medicalLicenseId: 'LIC-99281-MD',
+            medicalCollege: 'Johns Hopkins School of Medicine',
+            experienceYears: 18,
+            hospitalName: 'Metropolitan Cardiac Institute',
+            specialization: 'Advanced Electrophysiology'
+          });
+          
+          // Force approve doctor profile in database
+          const { data: authUser, error: authErr } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
+          if (authErr) throw authErr;
+          
+          if (authUser.user) {
+            await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', authUser.user.id);
+            await supabase.from('doctor_profiles').update({ verification_status: 'approved' }).eq('user_id', authUser.user.id);
+            
+            // Also seed to Firestore users collection
+            await setDoc(doc(db, 'users', authUser.user.id), {
+              uid: authUser.user.id,
+              email: normalizedEmail,
+              displayName: doctorName,
+              fullName: doctorName,
+              role: 'doctor',
+              status: 'approved',
+              onboarded: true,
+              onboardingCompleted: true,
+              specialization: 'Advanced Electrophysiology',
+              hospitalName: 'Metropolitan Cardiac Institute',
+              experience: '18 Years',
+              phoneNumber: '+1 (555) 019-2834'
+            }, { merge: true });
+          }
+          
+          // Sign in again
+          const retry = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
+          if (retry.error) throw retry.error;
+          result = retry.data;
+        } catch (seedErr: any) {
+          console.error("[DEMO SEEDING ERROR]:", seedErr);
+          throw new Error("Failed to auto-seed Doctor Demo account: " + seedErr.message);
+        }
+      } else if (isPatientDemo && (password === 'Patient@123' || password === 'patient123')) {
+        console.info("[DEMO SEEDING] Initializing Patient Demo Account...");
+        try {
+          // Pre-fetch or pre-provision the doctor to establish relationship
+          let doctorUid = '';
+          const { data: docProf } = await supabase.from('profiles').select('id').eq('email', 'doctor@heartsync.com').maybeSingle();
+          if (docProf) {
+            doctorUid = docProf.id;
+          } else {
+            console.info("[DEMO SEEDING] Pre-provisioning Doctor Demo for Patient connection...");
+            try {
+              await signupDoctor('doctor@heartsync.com', 'Doctor@123!', {
+                fullName: 'Dr. Demo Heart Specialist',
+                phone: '+1 (555) 019-2834',
+                age: 45,
+                medicalLicenseId: 'LIC-99281-MD',
+                medicalCollege: 'Johns Hopkins School of Medicine',
+                experienceYears: 18,
+                hospitalName: 'Metropolitan Cardiac Institute',
+                specialization: 'Advanced Electrophysiology'
+              });
+              const { data: dAuth } = await supabase.auth.signInWithPassword({ email: 'doctor@heartsync.com', password: 'Doctor@123!' });
+              if (dAuth.user) {
+                doctorUid = dAuth.user.id;
+                await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', doctorUid);
+                await supabase.from('doctor_profiles').update({ verification_status: 'approved' }).eq('user_id', doctorUid);
+                await setDoc(doc(db, 'users', doctorUid), {
+                  uid: doctorUid,
+                  email: 'doctor@heartsync.com',
+                  displayName: 'Dr. Demo Heart Specialist',
+                  fullName: 'Dr. Demo Heart Specialist',
+                  role: 'doctor',
+                  status: 'approved',
+                  onboarded: true,
+                  onboardingCompleted: true,
+                  specialization: 'Advanced Electrophysiology',
+                  hospitalName: 'Metropolitan Cardiac Institute',
+                  phoneNumber: '+1 (555) 019-2834'
+                }, { merge: true });
+              }
+            } catch (preErr) {
+              console.error("Failed to pre-provision doctor:", preErr);
+            }
+          }
+
+          await signupPatient(normalizedEmail, supabasePassword, {
+            fullName: 'Sarah Jenkins',
+            phone: '+1 (555) 048-1920',
+            age: 38,
+            gender: 'Female',
+            bloodGroup: 'O-Positive',
+            emergencyContactName: 'Robert Jenkins (Spouse)',
+            emergencyContactNumber: '+1 (555) 048-1921',
+            medicalConditions: 'Chronic hypertension, minor mitral valve prolapse',
+            medications: 'Lisinopril 10mg daily',
+            allergies: 'Penicillin',
+            familyHistory: 'Maternal grandfather had coronary artery disease'
+          });
+          
+          // Force approve patient profile in database
+          const { data: authUser, error: authErr } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
+          if (authErr) throw authErr;
+          
+          if (authUser.user) {
+            await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', authUser.user.id);
+            
+            // Seed demo metrics & history
+            await seedDemoPatientData(authUser.user.id, doctorUid);
+
+            // Establish relationship in Supabase SQL doctor_patients table
+            if (doctorUid) {
+              const { data: pRec } = await supabase.from('patients').select('id').eq('user_id', authUser.user.id).maybeSingle();
+              const { data: dRec } = await supabase.from('doctors').select('id').eq('user_id', doctorUid).maybeSingle();
+              if (pRec && dRec) {
+                await supabase.from('doctor_patients').insert({
+                  doctor_id: dRec.id,
+                  patient_id: pRec.id,
+                  status: 'active'
+                });
+                console.log("Seeded database link in doctor_patients successfully!");
+              }
+            }
+          }
+          
+          // Sign in again
+          const retry = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
+          if (retry.error) throw retry.error;
+          result = retry.data;
+        } catch (seedErr: any) {
+          console.error("[DEMO SEEDING ERROR]:", seedErr);
+          throw new Error("Failed to auto-seed Patient Demo account: " + seedErr.message);
+        }
+      } else {
+        console.error("Login Error:", error);
+        throw new Error(error.message || String(error));
+      }
+    }
+    
+    // Successful login: run automatic sync to Firestore for this account
+    if (result?.user) {
+      try {
+        // Fetch latest profile from Supabase and sync to Firestore
+        const { data: profileData } = await supabase.from('profiles').select('*').eq('id', result.user.id).single();
+        if (profileData) {
+          let subProfile = null;
+          if (profileData.role === 'patient') {
+            const { data: subData } = await supabase.from('patient_profiles').select('*').eq('user_id', result.user.id).maybeSingle();
+            subProfile = subData;
+          } else if (profileData.role === 'doctor') {
+            const { data: subData } = await supabase.from('doctor_profiles').select('*').eq('user_id', result.user.id).maybeSingle();
+            subProfile = subData;
+          }
+          
+          await setDoc(doc(db, 'users', result.user.id), {
+            uid: result.user.id,
+            email: normalizedEmail,
+            displayName: profileData.full_name,
+            fullName: profileData.full_name,
+            role: profileData.role,
+            status: profileData.status || 'approved',
+            onboarded: profileData.onboarded ?? true,
+            onboardingCompleted: profileData.onboardingCompleted ?? true,
+            photoURL: profileData.avatar_url || '',
+            ...(subProfile || {})
+          }, { merge: true });
+          
+          // Also if it is patient, ensure liveHealthMetrics is initialized
+          if (profileData.role === 'patient') {
+            await setDoc(doc(db, 'liveHealthMetrics', result.user.id), {
+              heartRate: 74,
+              o2: 98,
+              temp: 36.8,
+              status: 'Optimal',
+              timestamp: new Date().toISOString(),
+              isEmergency: false
+            }, { merge: true });
+          }
+        }
+      } catch (syncErr) {
+        console.error("Error syncing profile to Firestore:", syncErr);
+      }
+    }
+    
     showToast("Node Link Established", "success");
   };
 

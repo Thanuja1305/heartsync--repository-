@@ -61,7 +61,7 @@ const DoctorProfile = () => {
     
     setLoading(true);
     try {
-      await updateProfileData(user.uid, formData);
+      await updateProfileData(formData);
       showToast('Neural Profile Synchronized', 'success');
       setEditing(false);
     } catch (error) {
