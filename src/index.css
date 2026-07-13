@@ -50,4 +50,37 @@
   .glow-maroon-hover {
     box-shadow: 0 0 30px rgba(128, 0, 0, 0.12);
   }
+
+  /* Doctor Portal utilities */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ECG glow effect */
+  .ecg-glow {
+    filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.8));
+  }
+
+  /* Live pulse animation */
+  @keyframes live-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+  .animate-live-pulse {
+    animation: live-pulse 1.5s ease-in-out infinite;
+  }
+
+  /* Subtle card hover */
+  .card-hover {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .card-hover:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
+  }
 }
+
