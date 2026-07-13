@@ -13,6 +13,7 @@ import {
   extractECGFeatures, 
   classifyECGRhythm 
 } from "./src/services/ecgPipeline";
+import { checkEmergencyCondition } from "./backend/services/emergencyService";
 
 dotenv.config();
 
@@ -53,11 +54,19 @@ async function startServer() {
       if (error) throw error;
       
       if (is_emergency) {
-          await supabase.from('alerts').insert([{
+          const { data: alertData } = await supabase.from('alerts').insert([{
               patient_id: patientId,
               severity: 'CRITICAL',
               message: `Critical vitals detected: HR ${heartRate}, SpO2 ${spo2}`
-          }]);
+          }]).select();
+          
+          if (alertData && alertData[0]) {
+             checkEmergencyCondition(supabase, alertData[0], {
+                heart_rate: heartRate,
+                spo2: spo2,
+                temperature: temperature
+             }, 'Excellent').catch(e => console.error('Emergency dispatch failed:', e));
+          }
       }
       
       res.json({ success: true, message: "Vitals recorded" });
@@ -465,11 +474,19 @@ async function startServer() {
 
       // If emergency, create alert in Supabase
       if (analysisResult.status === 'EMERGENCY') {
-        await supabase.from('alerts').insert([{
+        const { data: alertData } = await supabase.from('alerts').insert([{
           patient_id: userId,
           severity: 'CRITICAL',
           message: analysisResult.reasoning
-        }]);
+        }]).select();
+
+        if (alertData && alertData[0]) {
+          checkEmergencyCondition(supabase, alertData[0], {
+            heart_rate: metrics.bpm || metrics.heartRate || 72,
+            spo2: metrics.spo2 || 98,
+            temperature: metrics.temperature || 98.6
+          }, 'Excellent').catch(e => console.error('Emergency dispatch failed:', e));
+        }
       }
 
       return res.json(analysisResult);
@@ -483,11 +500,19 @@ async function startServer() {
       try {
         // If emergency, ensure emergencyAlert is updated
         if (analysisResult.status === 'EMERGENCY') {
-          await supabase.from('alerts').insert([{
+          const { data: alertData } = await supabase.from('alerts').insert([{
             patient_id: userId,
             severity: 'CRITICAL',
             message: analysisResult.reasoning
-          }]);
+          }]).select();
+
+          if (alertData && alertData[0]) {
+            checkEmergencyCondition(supabase, alertData[0], {
+              heart_rate: metrics.bpm || metrics.heartRate || 72,
+              spo2: metrics.spo2 || 98,
+              temperature: metrics.temperature || 98.6
+            }, 'Excellent').catch(e => console.error('Emergency dispatch failed:', e));
+          }
         }
       } catch (dbError) {
         console.error("Failed to write offline fallback metrics to Firestore:", dbError);
@@ -652,11 +677,19 @@ async function startServer() {
 
           // Log trauma warnings if emergency is active
           if (alertLevel === 3) {
-            await supabase.from('alerts').insert([{
+            const { data: alertData } = await supabase.from('alerts').insert([{
               patient_id: patientId,
               severity: 'CRITICAL',
               message: `CRITICAL ALERT: HR=${hr}, SpO2=${o2}`
-            }]);
+            }]).select();
+
+            if (alertData && alertData[0]) {
+              checkEmergencyCondition(supabase, alertData[0], {
+                heart_rate: hr,
+                spo2: o2,
+                temperature: temp
+              }, quality.rating).catch(e => console.error('Emergency dispatch failed:', e));
+            }
           }
 
           // Return validated & annotated package back down ws channel
