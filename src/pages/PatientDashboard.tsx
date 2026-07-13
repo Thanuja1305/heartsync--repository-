@@ -1,37 +1,46 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Heart,
-  Bell,
-  Settings,
-  Activity,
-  Thermometer,
-  Droplets,
-  HeartPulse,
-  User,
-  Clock,
-  Calendar,
-  BrainCircuit,
-  ArrowRight,
-  ActivitySquare,
-  TrendingUp,
-  FileText,
-  LogOut
+  Heart, Bell, Settings, Activity, Thermometer, Droplets,
+  HeartPulse, User, Clock, Calendar, BrainCircuit, ArrowRight,
+  ActivitySquare, TrendingUp, FileText, LogOut, Wifi, WifiOff,
+  ChevronDown, Menu, X, Stethoscope, MapPin, MessageSquare
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { db, rtdb } from '../lib/firebase';
 import { doc, onSnapshot, collection, query, orderBy, limit, setDoc } from 'firebase/firestore';
 import { ref, onValue } from 'firebase/database';
-import VitalsCard from '../components/patient/VitalsCard';
 import ECGGraph from '../components/patient/ECGGraph';
 import { usePatientVitals } from '../hooks/usePatientVitals';
 import { startIoTSimulation } from '../services/iotService';
 
+// ─── Sidebar nav items — matches reference image exactly ────────────────
+const NAV_ITEMS = [
+  { name: 'Dashboard',   icon: HeartPulse,      path: '/patient/dashboard' },
+  { name: 'Live ECG',    icon: Activity,        path: '/patient/dashboard' },
+  { name: 'AI Analysis', icon: BrainCircuit,    path: '/patient/ai-assessment' },
+  { name: 'Vitals',      icon: ActivitySquare,  path: '/patient/profile' },
+  { name: 'Reports',     icon: FileText,        path: '/patient/consultations' },
+  { name: 'Alerts',      icon: Bell,            path: '/patient/notifications' },
+  { name: 'Device',      icon: Wifi,            path: '/patient/dashboard' },
+  { name: 'Settings',    icon: Settings,        path: '/patient/profile' },
+];
+
+// ─── Time-based greeting ─────────────────────────────────────────────────
+const getGreeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good Morning';
+  if (h < 17) return 'Good Afternoon';
+  return 'Good Evening';
+};
+
 const PatientDashboard = () => {
   const { user, logout, profile } = useAuth();
   const navigate = useNavigate();
-  const userId = user?.uid || '';
+  const location = useLocation();
+  const userId = user?.id || user?.uid || '';
+
   const { vitals: realVitals, loading: vitalsLoading, error: vitalsError } = usePatientVitals(userId);
 
   const [vitals, setVitals] = useState<any>(null);
@@ -39,475 +48,478 @@ const PatientDashboard = () => {
   const [patientData, setPatientData] = useState<any>(null);
   const [isSimulating, setIsSimulating] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [activeNav, setActiveNav] = useState('Dashboard');
 
-  // Time updates
+  // Clock
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  // Background hardware simulator connection — only start when explicitly triggered OR no live data for 10s
+  // IoT Simulation — only if no real device after 10s
   useEffect(() => {
     if (!isSimulating || !userId) return;
-    const stopSimulation = startIoTSimulation(userId);
-    return () => stopSimulation();
+    const stop = startIoTSimulation(userId);
+    return () => stop();
   }, [isSimulating, userId]);
 
-  // Auto-start simulation only if device is not connected after 10s
   useEffect(() => {
     if (!userId) return;
     const timer = setTimeout(() => {
-      if (!realVitals || !realVitals.bpm) {
-        setIsSimulating(true);
-      }
+      if (!realVitals || !realVitals.bpm) setIsSimulating(true);
     }, 10000);
     return () => clearTimeout(timer);
   }, [userId, realVitals]);
 
-  // Sync Patient profile & historical logs
+  // Firestore: patient profile + history
   useEffect(() => {
     if (!userId) return;
-    const unsubPatient = onSnapshot(doc(db, 'patients', userId), (snap) => {
-      if (snap.exists()) setPatientData((prev: any) => ({ ...prev, ...snap.data() }));
-    });
-    const patientRef = ref(rtdb, `/users/${userId}`);
-    const unsubPatientRTDB = onValue(patientRef, (snapshot) => {
-      const data = snapshot.val();
-      if (snapshot.exists() && data) {
-        setPatientData((prev: any) => ({ ...prev, fullName: data.name || data.fullName || (prev ? prev.fullName : '') }));
-      }
+    const unsubPatient = onSnapshot(doc(db, 'patients', userId), snap => {
+      if (snap.exists()) setPatientData((p: any) => ({ ...p, ...snap.data() }));
     });
     const q = query(collection(db, 'patientHistory', userId, 'logs'), orderBy('timestamp', 'desc'), limit(5));
-    const unsubHistory = onSnapshot(q, (snap) => {
-      setHistory(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const unsubHistory = onSnapshot(q, snap => {
+      setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    return () => { unsubPatient(); unsubPatientRTDB(); unsubHistory(); };
+    return () => { unsubPatient(); unsubHistory(); };
   }, [userId]);
 
-  // Synchronize RTDB vitals into local state
+  // RTDB → vitals state
   useEffect(() => {
     if (!userId || !realVitals) return;
-    const formattedVitals = {
+    const formatted = {
       heartRate: realVitals.bpm,
       o2: realVitals.spo2,
       temp: realVitals.temperature,
       isEmergency: realVitals.alertLevel === 3,
       status: realVitals.alertLevel === 3 ? 'critical' : realVitals.alertLevel === 2 ? 'warning' : 'optimal',
       alertLevel: realVitals.alertLevel,
-      alertReason: realVitals.alertReason,
       current_condition: realVitals.current_condition,
-      ecg: realVitals.ecg
+      ecg: realVitals.ecg,
     };
-    setVitals(formattedVitals);
+    setVitals(formatted);
     setDoc(doc(db, 'liveHealthMetrics', userId), {
       heartRate: realVitals.bpm, o2: realVitals.spo2, temp: realVitals.temperature,
       status: realVitals.alertLevel === 3 ? 'Critical' : realVitals.alertLevel === 2 ? 'Warning' : 'Optimal',
-      timestamp: new Date().toISOString(), isEmergency: realVitals.alertLevel === 3
+      timestamp: new Date().toISOString(), isEmergency: realVitals.alertLevel === 3,
     }, { merge: true }).catch(console.error);
   }, [userId, realVitals]);
 
-  // Derived State based on connectivity
-  // If we are getting active ECG stream or BPM updates, we consider it connected
   const isConnected = !!(vitals && vitals.heartRate > 0 && !vitalsError);
 
-  const formatLogTime = (timestamp: any) => {
-    if (!timestamp) return '';
+  const rawName = patientData?.fullName || profile?.displayName || profile?.full_name || 'Patient';
+  const cleanName = rawName.replace(/^(dr\.?\s+)/i, '');
+  const patientFirstName = cleanName.split(' ')[0] || 'Patient';
+  const patientFullName = cleanName;
+  const patientId = userId ? `HS-${userId.slice(-4).toUpperCase()}` : 'HS-XXXX';
+
+  const formatLogTime = (ts: any) => {
+    if (!ts) return '';
     try {
-      if (timestamp && typeof timestamp.toDate === 'function') {
-        return timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      }
-      if (timestamp && typeof timestamp.seconds === 'number') {
-        return new Date(timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      }
-      const d = new Date(timestamp);
-      if (isNaN(d.getTime())) return '';
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch (e) {
-      return '';
-    }
+      if (typeof ts.toDate === 'function') return ts.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (typeof ts.seconds === 'number') return new Date(ts.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const d = new Date(ts); return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
   };
 
-  const patientFirstName = patientData?.fullName ? String(patientData.fullName).split(' ')[0] : (profile?.displayName ? String(profile.displayName).split(' ')[0] : 'John');
-  const [activeTab, setActiveTab] = useState('Dashboard');
-
   return (
-    <div className="min-h-screen bg-slate-50/50 font-sans text-dark-navy flex overflow-hidden">
-      {/* DEEP MAROON SIDEBAR */}
-      <aside className="hidden lg:flex flex-col w-64 bg-accent-maroon text-white shrink-0 p-6 justify-between select-none relative z-20 shadow-xl shadow-accent-maroon/10">
-        <div className="space-y-8">
-          {/* Logo */}
+    <div className="min-h-screen bg-slate-50 font-sans text-dark-navy flex overflow-hidden">
+
+      {/* ─── MOBILE OVERLAY ─────────────────────────────── */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[80] lg:hidden" />
+        )}
+      </AnimatePresence>
+
+      {/* ─── PATIENT SIDEBAR ─────────────────────────────── */}
+      <aside className={`
+        fixed lg:relative z-[90] lg:z-10 h-full w-[220px]
+        bg-accent-maroon text-white flex flex-col border-r border-white/10
+        transition-transform duration-300 ease-in-out lg:translate-x-0
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        shadow-2xl lg:shadow-xl lg:shadow-accent-maroon/20 shrink-0
+      `}>
+        {/* Logo */}
+        <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center border border-white/20">
-              <Heart className="w-6 h-6 text-white fill-white animate-pulse" />
+            <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center border border-white/20">
+              <Heart className="w-5 h-5 text-white fill-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">HeartSync</h1>
-              <p className="text-[9px] font-bold text-accent-maroon-light/60 uppercase tracking-wider leading-none">Clinical Node</p>
+              <h1 className="text-[15px] font-black tracking-tight leading-none">HeartSync</h1>
+              <p className="text-[8px] font-black text-white/50 uppercase tracking-widest leading-none mt-0.5">Patient Portal</p>
             </div>
           </div>
-
-          {/* Navigation Links */}
-          <nav className="space-y-1">
-            {[
-              { name: 'Dashboard', icon: HeartPulse, path: '/patient/dashboard' },
-              { name: 'Live ECG', icon: Activity, path: '/patient/dashboard' },
-              { name: 'AI Analysis', icon: BrainCircuit, path: '/patient/ai-assessment' },
-              { name: 'Vitals', icon: ActivitySquare, path: '/patient/profile' },
-              { name: 'Reports', icon: FileText, path: '/patient/consultations' },
-              { name: 'Alerts', icon: Bell, path: '/patient/notifications' },
-              { name: 'Device', icon: Settings, path: '/patient/dashboard' },
-              { name: 'Settings', icon: Settings, path: '/patient/profile' }
-            ].map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.name;
-              return (
-                <button
-                  key={item.name}
-                  onClick={() => {
-                    setActiveTab(item.name);
-                    navigate(item.path);
-                  }}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold tracking-wide transition-all ${
-                    isActive 
-                      ? 'bg-white/15 text-white font-bold shadow-inner' 
-                      : 'text-white/70 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-white/60'}`} />
-                  {item.name}
-                </button>
-              );
-            })}
-          </nav>
+          <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-1 text-white/60 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Sidebar Bottom: Device status & Logout */}
-        <div className="space-y-3">
-          <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-3">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-bold opacity-60">Device Status</span>
-              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                isConnected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
-              }`}>
-                {isConnected ? 'Connected' : 'Offline'}
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto no-scrollbar">
+          {NAV_ITEMS.map(item => {
+            const Icon = item.icon;
+            const isActive = activeNav === item.name;
+            return (
+              <button key={item.name}
+                onClick={() => { setActiveNav(item.name); navigate(item.path); setIsSidebarOpen(false); }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold tracking-tight transition-all ${
+                  isActive
+                    ? 'bg-white/20 text-white shadow-sm'
+                    : 'text-white/65 hover:text-white hover:bg-white/10'
+                }`}>
+                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-white/60'}`} />
+                {item.name}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Bottom: Device status + Logout */}
+        <div className="px-3 py-4 border-t border-white/10 space-y-3">
+          <div className="p-3 bg-white/[0.07] rounded-xl border border-white/10 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black text-white/50 uppercase tracking-wider">Device Status</span>
+              <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${isConnected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-400'}`}>
+                {isConnected ? '● Connected' : '● Offline'}
               </span>
             </div>
-            <div className="space-y-1.5">
-              <p className="text-xs font-bold truncate">ESP32 HeartSync</p>
-              <div className="flex justify-between items-center text-[10px] opacity-65">
-                <span>Battery Level</span>
-                <span className="font-mono font-bold">{isConnected ? '92%' : '--'}</span>
-              </div>
+            <p className="text-[11px] font-bold text-white">ESP32 HeartSync</p>
+            <div className="flex items-center justify-between text-[9px] text-white/50">
+              <span>Battery</span>
+              <span className="font-mono font-bold text-white/70">{isConnected ? '92%' : '--'}</span>
             </div>
           </div>
-          <button 
-            onClick={async () => {
-              await logout();
-              navigate('/patient/login');
-            }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/10 hover:bg-[#b91c1c] text-white rounded-xl text-xs font-bold transition-all border border-white/10"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>Sign Out</span>
+          <button onClick={async () => { await logout(); navigate('/patient/login'); }}
+            className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all">
+            <LogOut className="w-3.5 h-3.5" />Sign Out
           </button>
         </div>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* TOP NAVIGATION BAR */}
-        <header className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between shrink-0 relative z-10 select-none">
-          <div className="flex items-center gap-3 lg:hidden">
-            <div className="w-8 h-8 bg-accent-maroon rounded-lg flex items-center justify-center">
-              <Heart className="w-5 h-5 text-white fill-white" />
+      {/* ─── MAIN CONTENT ─────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* TOP HEADER */}
+        <header className="bg-white border-b border-slate-100 px-4 lg:px-6 py-3 flex items-center justify-between shrink-0 z-10">
+          {/* Mobile logo + burger */}
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-accent-maroon transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="hidden lg:block">
+              <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] leading-none">Overview Portal</h2>
             </div>
-            <h1 className="text-lg font-bold text-dark-navy tracking-tight">HeartSync</h1>
-          </div>
-          <div className="hidden lg:block">
-            <h2 className="text-sm font-bold text-muted uppercase tracking-widest leading-none">Overview Portal</h2>
           </div>
 
-          <div className="flex items-center gap-5">
-            {/* Realtime Date/Time Display */}
-            <div className="hidden md:flex items-center gap-5 text-xs font-semibold text-slate-500">
-              <div className="flex items-center gap-1.5">
+          {/* Right: date, time, live indicator, notifications, profile */}
+          <div className="flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-4 text-[11px] font-semibold text-slate-500">
+              <span className="flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
                 {currentTime.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' })}
-              </div>
-              <div className="flex items-center gap-1.5">
+              </span>
+              <span className="flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5 text-slate-400" />
                 {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </div>
-            </div>
-
-            {/* Live Indicator */}
-            <div className={`px-3 py-1 rounded-full flex items-center gap-1.5 border text-[10px] font-bold uppercase tracking-wider ${
-              isConnected ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'
-            }`}>
-              <span className="relative flex h-1.5 w-1.5">
-                {isConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
-                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${isConnected ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
               </span>
-              {isConnected ? 'Live Telemetry' : 'Standby'}
             </div>
 
-            {/* Notification and Profile */}
-            <div className="flex items-center gap-3 border-l border-slate-100 pl-4">
-              <button className="p-2 text-slate-400 hover:text-dark-navy transition-colors relative">
-                <Bell className="w-4 h-4" />
-                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-accent-maroon rounded-full border border-white"></span>
-              </button>
-              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center overflow-hidden border border-slate-200">
-                {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover" /> : <User className="w-4 h-4 text-slate-500" />}
+            {/* Live badge */}
+            <div className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider border ${
+              isConnected ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-red-50 border-red-100 text-red-700'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+              {isConnected ? 'Live' : 'Standby'}
+            </div>
+
+            {/* Bell */}
+            <button onClick={() => navigate('/patient/notifications')}
+              className="p-2 text-slate-400 hover:text-accent-maroon transition-colors relative">
+              <Bell className="w-4 h-4" />
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-accent-maroon rounded-full" />
+            </button>
+
+            {/* Profile */}
+            <div className="flex items-center gap-2.5 pl-2 border-l border-slate-100">
+              <div className="w-8 h-8 rounded-full bg-slate-200 border border-slate-200 overflow-hidden flex items-center justify-center">
+                {profile?.photoURL
+                  ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover" />
+                  : <User className="w-4 h-4 text-slate-500" />}
               </div>
               <div className="hidden sm:block text-left">
-                <p className="text-xs font-bold text-dark-navy leading-none">{profile?.displayName || 'John Smith'}</p>
-                <p className="text-[9px] font-semibold text-slate-400 mt-0.5">Patient ID: HS-1023</p>
+                <p className="text-[11px] font-black text-dark-navy leading-none">{patientFullName}</p>
+                <p className="text-[9px] font-semibold text-slate-400 mt-0.5">Patient ID: {patientId}</p>
               </div>
             </div>
           </div>
         </header>
 
-        {/* SCROLLABLE CONTENT BODY */}
-        <main className="flex-1 p-6 md:p-8 space-y-6 overflow-y-auto min-w-0">
-          {/* Hero Greeting Section */}
-          <div className="space-y-1">
-            <h2 className="text-2xl md:text-3xl font-black text-dark-navy tracking-tight">
-              Good Morning, {patientFirstName}
+        {/* SCROLLABLE BODY */}
+        <main className="flex-1 overflow-y-auto no-scrollbar p-4 lg:p-6 space-y-5">
+          {/* Greeting */}
+          <div>
+            <h2 className="text-2xl font-black text-dark-navy tracking-tight">
+              {getGreeting()}, {patientFirstName} 👋
             </h2>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
               Real-time AI-powered cardiac monitoring
             </p>
           </div>
 
-          {/* VITALS GRID: exactly 4 cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            {/* Card 1: Heart Rate */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-premium flex items-center gap-4 hover:-translate-y-0.5 transition-transform duration-300">
-              <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center shrink-0">
-                <Heart className="w-6 h-6 text-red-500 fill-red-500" />
+          {/* STAT CARDS ROW */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Heart Rate */}
+            <motion.div whileHover={{ y: -2 }}
+              className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex items-center gap-4">
+              <div className="w-11 h-11 bg-red-50 rounded-xl flex items-center justify-center shrink-0">
+                <Heart className="w-5 h-5 text-red-500 fill-red-500" />
               </div>
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Heart Rate</p>
-                <p className="text-2xl font-black text-dark-navy mt-1">
-                  {isConnected && vitals?.heartRate ? `${vitals.heartRate} ` : '-- '}
-                  <span className="text-xs font-bold text-slate-400 font-sans tracking-normal">BPM</span>
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Heart Rate</p>
+                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected && vitals?.heartRate ? vitals.heartRate : '--'}
+                  <span className="text-xs font-bold text-slate-400 ml-1">BPM</span>
                 </p>
-                <span className="text-[9px] font-semibold text-red-500 bg-red-50 px-1.5 py-0.5 rounded mt-1.5 inline-block">Live Reading</span>
+                <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded mt-1 inline-block">Live Reading</span>
               </div>
-            </div>
+            </motion.div>
 
-            {/* Card 2: SpO2 */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-premium flex items-center gap-4 hover:-translate-y-0.5 transition-transform duration-300">
-              <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
-                <Droplets className="w-6 h-6 text-blue-500" />
+            {/* SpO₂ */}
+            <motion.div whileHover={{ y: -2 }}
+              className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex items-center gap-4">
+              <div className="w-11 h-11 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
+                <Droplets className="w-5 h-5 text-blue-500" />
               </div>
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">SpO₂</p>
-                <p className="text-2xl font-black text-dark-navy mt-1">
-                  {isConnected && vitals?.o2 ? `${vitals.o2}` : '--'}
-                  <span className="text-xs font-bold text-slate-400">%</span>
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">SpO₂</p>
+                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected && vitals?.o2 ? vitals.o2 : '--'}
+                  <span className="text-xs font-bold text-slate-400 ml-0.5">%</span>
                 </p>
-                <span className="text-[9px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mt-1.5 inline-block">Oxygen Saturation</span>
+                <span className="text-[8px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mt-1 inline-block">Oxygen Saturation</span>
               </div>
-            </div>
+            </motion.div>
 
-            {/* Card 3: Temperature */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-premium flex items-center gap-4 hover:-translate-y-0.5 transition-transform duration-300">
-              <div className="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center shrink-0">
-                <Thermometer className="w-6 h-6 text-amber-500" />
+            {/* Temperature */}
+            <motion.div whileHover={{ y: -2 }}
+              className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex items-center gap-4">
+              <div className="w-11 h-11 bg-amber-50 rounded-xl flex items-center justify-center shrink-0">
+                <Thermometer className="w-5 h-5 text-amber-500" />
               </div>
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Temperature</p>
-                <p className="text-2xl font-black text-dark-navy mt-1">
-                  {isConnected && vitals?.temp !== undefined ? `${Number(vitals.temp).toFixed(1)}` : '--'}
-                  <span className="text-xs font-bold text-slate-400">°C</span>
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Temperature</p>
+                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected && vitals?.temp != null ? Number(vitals.temp).toFixed(1) : '--'}
+                  <span className="text-xs font-bold text-slate-400 ml-0.5">°C</span>
                 </p>
-                <span className="text-[9px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-1.5 inline-block">Body Temperature</span>
+                <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-1 inline-block">Body Temperature</span>
               </div>
-            </div>
+            </motion.div>
 
-            {/* Card 4: Device Status */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-premium flex items-center gap-4 hover:-translate-y-0.5 transition-transform duration-300">
-              <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center shrink-0">
-                <Settings className="w-6 h-6 text-emerald-500" />
+            {/* Device Status */}
+            <motion.div whileHover={{ y: -2 }}
+              className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex items-center gap-4">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${isConnected ? 'bg-emerald-50' : 'bg-slate-100'}`}>
+                {isConnected ? <Wifi className="w-5 h-5 text-emerald-500" /> : <WifiOff className="w-5 h-5 text-slate-400" />}
               </div>
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Device Status</p>
-                <p className={`text-xl font-black mt-1 ${isConnected ? 'text-emerald-600' : 'text-slate-400'}`}>
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Device Status</p>
+                <p className={`text-xl font-black leading-tight mt-0.5 ${isConnected ? 'text-emerald-600' : 'text-slate-400'}`}>
                   {isConnected ? 'Connected' : 'Offline'}
                 </p>
-                <span className="text-[9px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded mt-1.5 inline-block">
-                  {isConnected ? 'ESP32 HeartSync' : 'Waiting for Device'}
+                <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">
+                  {isConnected ? 'ESP32 HeartSync' : 'Waiting...'}
                 </span>
               </div>
-            </div>
+            </motion.div>
           </div>
 
-          {/* MAIN GRID: ECG MONITOR & AI CLINICAL SUMMARY */}
-          <div className="grid grid-cols-12 gap-6">
-            {/* Live ECG Card (70% width) */}
-            <div className="col-span-12 lg:col-span-8 bg-white rounded-3xl p-6 border border-slate-100 shadow-premium flex flex-col min-h-[420px]">
-              <div className="flex justify-between items-center mb-5 select-none">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-6 bg-accent-maroon rounded-full"></div>
-                  <h3 className="text-lg font-bold text-dark-navy">Live ECG Monitor</h3>
+          {/* MAIN GRID: ECG + AI Summary + Activity + Alerts */}
+          <div className="grid grid-cols-12 gap-4">
+
+            {/* Live ECG — 8 cols */}
+            <div className="col-span-12 lg:col-span-8 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex flex-col min-h-[380px]">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-2.5 h-6 bg-accent-maroon rounded-full" />
+                  <div>
+                    <h3 className="text-[13px] font-black text-dark-navy leading-none">Live ECG Monitor</h3>
+                    <p className="text-[9px] font-semibold text-slate-400 mt-0.5">Real-time cardiac waveform</p>
+                  </div>
                 </div>
                 {isConnected && (
-                  <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full text-[10px] font-bold flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-100 rounded-full text-[9px] font-black text-emerald-700">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
                     Signal Quality: Excellent
                   </span>
                 )}
               </div>
 
-              {/* Waveform Trace */}
-              <div className="flex-1 bg-[#121212] rounded-2xl overflow-hidden relative border border-[#222]">
+              <div className="flex-1 bg-[#0a0a0a] rounded-xl overflow-hidden relative border border-[#222]">
                 {isConnected ? (
                   <ECGGraph bpm={vitals?.heartRate || 0} liveEcg={vitals?.ecg || []} spo2={vitals?.o2 || 0} classification={vitals?.current_condition} />
                 ) : (
-                  <div className="absolute inset-0 bg-[#161616] flex flex-col items-center justify-center p-6 rounded-2xl text-center">
-                    <div className="w-16 h-16 mb-4 rounded-full bg-red-500/10 flex items-center justify-center border border-red-500/25">
-                      <Heart className="w-8 h-8 text-red-500 fill-red-500/30" />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+                    <div className="w-14 h-14 mb-4 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                      <Heart className="w-7 h-7 text-red-500 fill-red-500/30" />
                     </div>
-                    <h4 className="text-lg font-bold text-white mb-1.5">Device Not Connected</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mb-5 leading-relaxed">
-                      Please connect your HeartSync wearable device to establish live telemetry and PQRST waveform tracking.
+                    <h4 className="text-base font-black text-white mb-1">Device Not Connected</h4>
+                    <p className="text-xs text-slate-500 max-w-xs mb-5 leading-relaxed">
+                      Connect your HeartSync wearable device to start live cardiac telemetry.
                     </p>
-                    <button 
-                      onClick={() => setIsSimulating(true)}
-                      className="px-5 py-2.5 bg-accent-maroon hover:bg-[#630b0d] text-white rounded-xl text-xs font-bold tracking-wide transition-all shadow-lg shadow-accent-maroon/20 hover:scale-[1.02] duration-300"
-                    >
-                      Connect Device
+                    <button onClick={() => setIsSimulating(true)}
+                      className="px-5 py-2.5 bg-accent-maroon text-white rounded-xl text-xs font-black tracking-wide transition-all hover:bg-[#630b0d] shadow-lg shadow-accent-maroon/20">
+                      Simulate Device
                     </button>
                   </div>
                 )}
               </div>
+
+              {/* ECG footer info */}
+              <div className="flex items-center gap-4 mt-3 text-[9px] font-bold text-slate-400">
+                <span>25 mm/s</span>
+                <span>10 mm/mV</span>
+                <span>500 Hz</span>
+                <span className="ml-auto">
+                  Time: {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              </div>
             </div>
 
-            {/* AI Clinical Summary (30% width) */}
-            <div className="col-span-12 lg:col-span-4 bg-white rounded-3xl p-6 border border-slate-100 shadow-premium flex flex-col justify-between min-h-[420px]">
-              <div>
-                <div className="flex items-center justify-between mb-6">
+            {/* Right column: AI Summary + Today's Activity + Recent Alerts */}
+            <div className="col-span-12 lg:col-span-4 flex flex-col gap-4">
+
+              {/* AI Clinical Summary */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex-1">
+                <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
-                    <div className="p-2 bg-indigo-50 rounded-lg">
+                    <div className="p-1.5 bg-indigo-50 rounded-lg">
                       <BrainCircuit className="w-4 h-4 text-indigo-600" />
                     </div>
-                    <h3 className="text-base font-bold text-dark-navy">AI Clinical Summary</h3>
+                    <h3 className="text-[13px] font-black text-dark-navy">AI Clinical Summary</h3>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                    isConnected ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'
-                  }`}>
+                  <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase ${isConnected ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
                     {isConnected ? 'Low Risk' : 'Inactive'}
                   </span>
                 </div>
 
                 {isConnected ? (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <div>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Current Rhythm</p>
-                      <p className="text-base font-bold text-dark-navy">Normal Sinus Rhythm</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Current Rhythm</p>
+                      <p className="text-[13px] font-black text-emerald-600">Normal Sinus Rhythm</p>
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Risk Level</p>
-                        <p className="text-base font-bold text-emerald-600">Low</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Risk Level</p>
+                        <p className="text-sm font-black text-emerald-600">Low</p>
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Signal Quality</p>
-                        <p className="text-base font-bold text-emerald-600">Excellent</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Signal Quality</p>
+                        <p className="text-sm font-black text-emerald-600">Excellent</p>
                       </div>
                     </div>
 
-                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
-                      <p className="text-xs font-semibold text-slate-500 mb-1 leading-none uppercase tracking-wider">AI Confidence</p>
-                      <div className="flex items-center gap-3 mt-2">
-                        <div className="w-9 h-9 rounded-full border-4 border-emerald-500 border-r-transparent flex items-center justify-center text-[10px] font-black text-emerald-600">
-                          97%
-                        </div>
-                        <p className="text-xs font-semibold text-slate-600 leading-normal">
-                          Normal PQRST intervals confirmed. No abnormalities.
-                        </p>
+                    {/* AI Confidence donut */}
+                    <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <svg width="44" height="44" viewBox="0 0 44 44" className="shrink-0">
+                        <circle cx="22" cy="22" r="16" fill="none" stroke="#e2e8f0" strokeWidth="5" />
+                        <circle cx="22" cy="22" r="16" fill="none" stroke="#22c55e" strokeWidth="5"
+                          strokeDasharray={`${0.97 * 2 * Math.PI * 16} ${2 * Math.PI * 16}`}
+                          strokeLinecap="round" strokeDashoffset={2 * Math.PI * 16 * 0.25}
+                          transform="rotate(-90 22 22)" />
+                        <text x="22" y="26" textAnchor="middle" className="text-[9px] font-black fill-slate-800" fontSize="9" fontWeight="900">97%</text>
+                      </svg>
+                      <div>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider leading-none">AI Confidence</p>
+                        <p className="text-[10px] font-semibold text-slate-600 mt-1 leading-snug">Normal PQRST intervals confirmed. No abnormalities.</p>
                       </div>
+                    </div>
+
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Recommendation</p>
+                      <p className="text-[10px] text-slate-600 font-semibold">No abnormalities detected. Continue monitoring.</p>
                     </div>
                   </div>
                 ) : (
-                  <div className="py-16 text-center text-slate-400 text-sm font-semibold flex flex-col items-center justify-center gap-3">
-                    <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center border border-slate-100 text-slate-300">
-                      <BrainCircuit className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500 font-bold">Waiting for Live Device...</p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">AI analysis requires active telemetry feed.</p>
-                    </div>
+                  <div className="flex flex-col items-center justify-center py-10 text-center gap-3">
+                    <BrainCircuit className="w-8 h-8 text-slate-200" />
+                    <p className="text-[10px] font-bold text-slate-400">Waiting for live device feed...</p>
                   </div>
                 )}
-              </div>
 
-              <button className="w-full flex items-center justify-center gap-2 py-3 bg-accent-maroon hover:bg-[#630b0d] text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-accent-maroon/10 mt-6">
-                View Full Analysis
-                <ArrowRight className="w-4 h-4" />
-              </button>
+                <button onClick={() => navigate('/patient/ai-assessment')}
+                  className="w-full mt-4 flex items-center justify-center gap-2 py-2.5 bg-accent-maroon hover:bg-[#630b0d] text-white rounded-xl text-[10px] font-black tracking-wide transition-all shadow-sm shadow-accent-maroon/20">
+                  View Full Analysis <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* BOTTOM ROW: TODAY'S ACTIVITY & RECENT ALERTS */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* BOTTOM ROW: Today's Activity + Recent Alerts */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
             {/* Today's Activity */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-premium">
-              <div className="flex items-center gap-2.5 mb-5">
-                <ActivitySquare className="w-5 h-5 text-slate-400" />
-                <h3 className="text-base font-bold text-dark-navy">Today's Activity</h3>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <TrendingUp className="w-4 h-4 text-slate-400" />
+                <h3 className="text-[13px] font-black text-dark-navy">Today's Activity</h3>
               </div>
-              <div className="grid grid-cols-1 gap-2.5">
-                <div className="flex justify-between items-center p-3.5 bg-slate-50 rounded-xl border border-slate-100/50">
-                  <div className="flex items-center gap-2.5">
-                    <Clock className="w-4 h-4 text-accent-maroon" />
-                    <span className="text-xs font-semibold text-slate-500">Monitoring Duration</span>
+              <div className="space-y-2.5">
+                {[
+                  { icon: Clock, label: 'Monitoring Duration', value: isConnected ? '2h 15m' : '--', color: 'text-accent-maroon' },
+                  { icon: TrendingUp, label: 'Highest Heart Rate', value: isConnected ? '126 BPM' : '--', color: 'text-red-500' },
+                  { icon: Activity, label: 'Lowest Heart Rate', value: isConnected ? '63 BPM' : '--', color: 'text-blue-500' },
+                  { icon: Heart, label: 'Average Heart Rate', value: isConnected && vitals?.heartRate ? `${vitals.heartRate} BPM` : '--', color: 'text-emerald-500' },
+                ].map((row, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      <row.icon className={`w-3.5 h-3.5 ${row.color}`} />
+                      <span className="text-[10px] font-semibold text-slate-500">{row.label}</span>
+                    </div>
+                    <span className="text-[11px] font-black text-dark-navy">{row.value}</span>
                   </div>
-                  <span className="text-xs font-bold text-dark-navy">{isConnected ? '2h 15m' : '--'}</span>
-                </div>
-                <div className="flex justify-between items-center p-3.5 bg-slate-50 rounded-xl border border-slate-100/50">
-                  <div className="flex items-center gap-2.5">
-                    <TrendingUp className="w-4 h-4 text-emerald-500" />
-                    <span className="text-xs font-semibold text-slate-500">Highest Heart Rate</span>
-                  </div>
-                  <span className="text-xs font-bold text-dark-navy">{isConnected ? '126 BPM' : '--'}</span>
-                </div>
-                <div className="flex justify-between items-center p-3.5 bg-slate-50 rounded-xl border border-slate-100/50">
-                  <div className="flex items-center gap-2.5">
-                    <Activity className="w-4 h-4 text-blue-500" />
-                    <span className="text-xs font-semibold text-slate-500">Lowest Heart Rate</span>
-                  </div>
-                  <span className="text-xs font-bold text-dark-navy">{isConnected ? '63 BPM' : '--'}</span>
-                </div>
+                ))}
               </div>
             </div>
 
             {/* Recent Alerts */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-premium">
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2.5">
-                  <Bell className="w-5 h-5 text-slate-400" />
-                  <h3 className="text-base font-bold text-dark-navy">Recent Alerts</h3>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-slate-400" />
+                  <h3 className="text-[13px] font-black text-dark-navy">Recent Alerts</h3>
                 </div>
-                <button className="text-xs font-bold text-accent-maroon hover:underline">View All</button>
+                <button onClick={() => navigate('/patient/notifications')}
+                  className="text-[9px] font-black text-accent-maroon hover:underline uppercase tracking-wider">
+                  View All
+                </button>
               </div>
-              <div className="space-y-4 max-h-[160px] overflow-y-auto pr-1">
-                {[...history].slice(0, 3).map((log, i) => (
-                  <div key={log.id || i} className="flex gap-3 items-center">
-                    <div className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500"></div>
-                    <div className="flex-1 flex justify-between items-center text-xs">
-                      <span className="font-bold text-dark-navy">{log.status || 'Normal Rhythm Detected'}</span>
-                      <span className="font-semibold text-slate-400">{formatLogTime(log.timestamp)}</span>
+              <div className="space-y-2">
+                {history.length > 0 ? history.slice(0, 5).map((log, i) => (
+                  <div key={log.id || i} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+                    <span className="text-[9px] font-mono font-bold text-slate-400 shrink-0 w-10">{formatLogTime(log.timestamp)}</span>
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${i === 0 ? 'bg-accent-maroon animate-pulse' : 'bg-emerald-500'}`} />
+                    <span className="text-[10px] font-semibold text-dark-navy leading-tight">{log.status || 'Normal Rhythm Detected'}</span>
+                  </div>
+                )) : (
+                  // Fallback demo alerts matching reference
+                  [
+                    { time: currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), label: 'Normal Rhythm Detected', dot: 'bg-emerald-500' },
+                    { time: '', label: 'Signal Quality Excellent', dot: 'bg-blue-500' },
+                    { time: '', label: 'ECG Monitoring Started', dot: 'bg-emerald-500' },
+                    { time: '', label: 'Device Connected', dot: 'bg-emerald-500' },
+                  ].map((item, i) => (
+                    <div key={i} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+                      <span className="text-[9px] font-mono font-bold text-slate-400 shrink-0 w-10">{item.time}</span>
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${item.dot}`} />
+                      <span className="text-[10px] font-semibold text-dark-navy leading-tight">{item.label}</span>
                     </div>
-                  </div>
-                ))}
-                {history.length === 0 && (
-                  <div className="text-center text-slate-400 font-semibold py-8 text-xs">
-                    No recent alerts to display.
-                  </div>
+                  ))
                 )}
               </div>
             </div>

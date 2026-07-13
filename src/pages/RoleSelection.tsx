@@ -6,40 +6,45 @@ import { useAuth } from '../context/AuthContext';
 
 const RoleSelection = () => {
   const navigate = useNavigate();
-  const { updateProfileData, user, profile, loading: authLoading, showToast } = useAuth();
+  const { updateProfileData, user, profile, loading: authLoading, showToast, logout } = useAuth();
   const [loading, setLoading] = useState(false);
   const [selectedRole, setSelectedRole] = useState<'patient' | 'doctor' | 'admin' | null>(null);
 
-  React.useEffect(() => {
-    if (!authLoading && profile?.role) {
-      if (profile.role === 'admin') {
-        navigate('/admin');
-      } else if (profile.role === 'patient') {
-        navigate('/patient/dashboard');
-      } else if (profile.role === 'doctor') {
-        const status = (profile as any).roleProfile?.verification_status || 'pending';
-        if (status === 'approved') {
-          navigate('/doctor/dashboard');
-        } else {
-          navigate('/doctor-verification-pending');
-        }
-      } else {
-        navigate('/');
-      }
-    }
-  }, [profile, authLoading, navigate]);
-
+  // Remove automatic redirect on mount to allow users to see the Role Selection page when they click Sign In.
   const handleRoleSelect = async (role: 'patient' | 'doctor' | 'admin') => {
     setSelectedRole(role);
-    
-    // If we already have a user but no role, update it now
-    if (user && !profile?.role) {
-      setLoading(true);
-      try {
-        await updateProfileData({ role });
+    setLoading(true);
 
+    try {
+      // If we already have a user and their profile role matches the selected role, send them directly to dashboard
+      if (user && profile?.role === role) {
+        showToast(`Welcome back! Accessing ${role} portal...`, 'success');
+        if (role === 'patient') {
+          navigate('/patient/dashboard');
+        } else if (role === 'doctor') {
+          const status = profile.roleProfile?.verification_status || 'pending';
+          if (status === 'approved') {
+            navigate('/doctor/dashboard');
+          } else {
+            navigate('/doctor-verification-pending');
+          }
+        } else {
+          navigate('/admin');
+        }
+        setLoading(false);
+        return;
+      }
+
+      // If we already have a user but their active session role is different, sign them out first
+      if (user && profile?.role && profile.role !== role) {
+        showToast(`Switching roles... signing out of active session`, 'success');
+        await logout();
+      }
+
+      // If we have a user but no profile role, update the profile role
+      if (user && !profile?.role) {
+        await updateProfileData({ role });
         showToast(`${role} profile initialized`, 'success');
-        
         if (role === 'patient') {
           navigate('/patient/dashboard');
         } else if (role === 'doctor') {
@@ -47,23 +52,23 @@ const RoleSelection = () => {
         } else {
           navigate('/admin');
         }
-      } catch (error) {
-        console.error("Error setting role:", error);
-        showToast("Failed to set role. Please try logging in again.", "error");
-        navigate(role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient/login' : '/doctor/login');
-      } finally {
         setLoading(false);
+        return;
       }
-      return;
-    }
 
-    showToast(`Accessing ${role} portal...`, 'success');
-    
-    const targetPath = role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient/login' : '/doctor/login';
-    
-    setTimeout(() => {
-      navigate(targetPath);
-    }, 800);
+      // If no user is logged in, show the login page for the selected role
+      showToast(`Redirecting to ${role} login...`, 'success');
+      const targetPath = role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient/login' : '/doctor/login';
+      setTimeout(() => {
+        navigate(targetPath);
+        setLoading(false);
+      }, 800);
+
+    } catch (error) {
+      console.error("Error during role selection:", error);
+      showToast("Verification protocol failed.", "error");
+      setLoading(false);
+    }
   };
 
   return (
