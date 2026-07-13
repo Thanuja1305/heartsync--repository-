@@ -11,6 +11,8 @@ import PatientLogin from './pages/PatientLogin';
 import DoctorLogin from './pages/DoctorLogin';
 import Signup from './pages/Signup';
 import RoleSelection from './pages/RoleSelection';
+const PatientSignup = lazy(() => import('./pages/PatientSignup'));
+const DoctorSignup = lazy(() => import('./pages/DoctorSignup'));
 const PatientOnboarding = lazy(() => import('./pages/PatientOnboarding'));
 const DoctorOnboarding = lazy(() => import('./pages/DoctorOnboarding'));
 const PatientDashboard = lazy(() => import('./pages/PatientDashboard'));
@@ -57,7 +59,27 @@ export default function App() {
             <Route path="/doctor/login" element={<DoctorLogin />} />
             <Route path="/signup" element={<Signup />} />
             
-            <Route path="/select-role" element={<RoleSelection />} />
+            <Route path="/auth" element={<RoleSelection />} />
+            <Route path="/select-role" element={<Navigate to="/auth" replace />} />
+            <Route path="/patient-login" element={<PatientLogin />} />
+            <Route path="/patient-signup" element={<PatientSignup />} />
+            <Route path="/doctor-login" element={<DoctorLogin />} />
+            <Route path="/doctor-signup" element={<DoctorSignup />} />
+            <Route path="/patient-dashboard" element={
+              <ProtectedRoute accessRole="patient">
+                <PatientDashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/doctor-dashboard" element={
+              <ProtectedRoute accessRole="doctor">
+                <DoctorDashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/doctor-verification-pending" element={
+              <ProtectedRoute>
+                <PendingApproval />
+              </ProtectedRoute>
+            } />
 
             <Route path="/patient/onboarding" element={
               <ProtectedRoute>

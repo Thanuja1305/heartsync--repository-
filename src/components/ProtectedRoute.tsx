@@ -24,11 +24,11 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; accessRole?: 'patien
   }
 
   if (!user) {
-    return <Navigate to="/select-role" replace />;
+    return <Navigate to="/auth" replace />;
   }
 
   // If user is at role selection, let them be there if they don't have a role
-  if (path === '/select-role') {
+  if (path === '/auth' || path === '/select-role') {
     if (profile?.role) {
       return <Navigate to="/" replace />;
     }
@@ -36,8 +36,8 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; accessRole?: 'patien
   }
 
   // If user has no role, force role selection
-  if (!profile?.role && path !== '/select-role') {
-    return <Navigate to="/select-role" replace />;
+  if (!profile?.role && path !== '/auth' && path !== '/select-role') {
+    return <Navigate to="/auth" replace />;
   }
 
   // Role checking
@@ -56,11 +56,11 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; accessRole?: 'patien
     return <Navigate to="/" replace />;
   }
 
-  if (profile?.role === 'patient' && path.startsWith('/doctor') && !path.startsWith(`/doctor/patient/${user.uid}`)) {
+  if (profile?.role === 'patient' && (path.startsWith('/doctor') || path.startsWith('/doctor-')) && !path.startsWith(`/doctor/patient/${user.uid}`)) {
     return <Navigate to="/" replace />;
   }
 
-  if (profile?.role === 'doctor' && path.startsWith('/patient')) {
+  if (profile?.role === 'doctor' && (path.startsWith('/patient') || path.startsWith('/patient-'))) {
     return <Navigate to="/" replace />;
   }
 

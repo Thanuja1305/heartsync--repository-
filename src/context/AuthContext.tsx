@@ -20,10 +20,11 @@ interface UserProfile {
   created_at?: string;
   uid?: string; // Add uid for backwards compatibility with some components
   displayName?: string | null; // Backwards compatibility
+  roleProfile?: any; // Sub-profile info (patient_profiles or doctor_profiles)
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: any;
   profile: UserProfile | null;
   loading: boolean;
   isOnline: boolean;
@@ -34,6 +35,30 @@ interface AuthContextType {
   loginWithGoogle: (intendedRole?: 'patient' | 'doctor') => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signup: (email: string, password: string, fullName: string) => Promise<void>;
+  signupPatient: (email: string, password: string, profileData: {
+    fullName: string;
+    phone: string;
+    age: number;
+    gender: string;
+    bloodGroup: string;
+    emergencyContactName: string;
+    emergencyContactNumber: string;
+    medicalConditions: string;
+    medications: string;
+    allergies: string;
+    familyHistory: string;
+  }) => Promise<void>;
+  signupDoctor: (email: string, password: string, profileData: {
+    fullName: string;
+    phone: string;
+    age: number;
+    medicalLicenseId: string;
+    medicalCollege: string;
+    experienceYears: number;
+    hospitalName: string;
+    specialization?: string;
+    medicalDocumentUrl?: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -49,6 +74,8 @@ const AuthContext = createContext<AuthContextType>({
   loginWithGoogle: async () => {},
   resetPassword: async () => {},
   signup: async () => {},
+  signupPatient: async () => {},
+  signupDoctor: async () => {},
   logout: async () => {}
 });
 
@@ -71,7 +98,7 @@ const safeStringify = (obj: any): string => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any>(null);
   const { isOnline } = useNetwork();
   const [profile, setProfile] = useState<UserProfile | null>(() => {
     const saved = localStorage.getItem('last_known_profile');
@@ -114,7 +141,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('intended_role', intendedRole);
       } catch (e) { console.warn('Could not save intended_role to localStorage'); }
     }
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin + '/auth'
+      }
+    });
     if (error) {
       console.error("Google Auth Error:", error);
       showToast(error.message, "error");
@@ -153,14 +185,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Create profile record in Supabase
       const newProfile = {
         id: data.user.id,
-        role: 'patient', // Default role, can be updated later
+        email,
+        role: 'patient', 
         full_name: fullName,
-        status: 'approved',
-        onboarded: false,
-        onboardingCompleted: false
+        created_at: new Date().toISOString()
       };
       
-      const { error: profileError } = await supabase.from('profiles').insert([newProfile]);
+      const { error: profileError } = await supabase.from('profiles').insert([newProfile as any]);
       if (profileError) {
           console.error("Profile creation error:", profileError);
       }
@@ -169,10 +200,144 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     showToast("Neural Profile Registered", "success");
   };
 
+  const signupPatient = async (email: string, password: string, profileData: {
+    fullName: string;
+    phone: string;
+    age: number;
+    gender: string;
+    bloodGroup: string;
+    emergencyContactName: string;
+    emergencyContactNumber: string;
+    medicalConditions: string;
+    medications: string;
+    allergies: string;
+    familyHistory: string;
+  }) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: profileData.fullName
+        }
+      }
+    });
+
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error("Patient creation registration failed");
+
+    // Create base profile
+    const baseProfile = {
+      id: data.user.id,
+      user_id: data.user.id,
+      email,
+      full_name: profileData.fullName,
+      role: 'patient'
+    };
+    const { error: baseError } = await supabase.from('profiles').insert([baseProfile as any]);
+    if (baseError) console.error("Error creating patient base profile:", baseError);
+
+    // Create patient sub-profile
+    const patientProfilePayload = {
+      user_id: data.user.id,
+      phone: profileData.phone,
+      age: profileData.age,
+      gender: profileData.gender,
+      blood_group: profileData.bloodGroup,
+      medical_conditions: profileData.medicalConditions,
+      medications: profileData.medications,
+      allergies: profileData.allergies,
+      family_history: profileData.familyHistory,
+      emergency_contact_name: profileData.emergencyContactName,
+      emergency_contact_number: profileData.emergencyContactNumber
+    };
+    const { error: patientProfileError } = await supabase.from('patient_profiles').insert([patientProfilePayload as any]);
+    if (patientProfileError) console.error("Error creating patient sub-profile:", patientProfileError);
+
+    // Create legacy patient record for backwards compatibility
+    const legacyPatientPayload = {
+      user_id: data.user.id,
+      date_of_birth: new Date(new Date().getFullYear() - profileData.age, 0, 1).toISOString().split('T')[0],
+      gender: profileData.gender,
+      blood_group: profileData.bloodGroup,
+      emergency_contact: profileData.emergencyContactName,
+      emergency_phone: profileData.emergencyContactNumber,
+      medical_notes: profileData.medicalConditions
+    };
+    const { error: legacyError } = await supabase.from('patients').insert([legacyPatientPayload as any]);
+    if (legacyError) console.error("Error creating legacy patient:", legacyError);
+
+    showToast("Patient Node Link Ready", "success");
+  };
+
+  const signupDoctor = async (email: string, password: string, profileData: {
+    fullName: string;
+    phone: string;
+    age: number;
+    medicalLicenseId: string;
+    medicalCollege: string;
+    experienceYears: number;
+    hospitalName: string;
+    specialization?: string;
+    medicalDocumentUrl?: string;
+  }) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: profileData.fullName
+        }
+      }
+    });
+
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error("Doctor creation registration failed");
+
+    // Create base profile
+    const baseProfile = {
+      id: data.user.id,
+      user_id: data.user.id,
+      email,
+      full_name: profileData.fullName,
+      role: 'doctor'
+    };
+    const { error: baseError } = await supabase.from('profiles').insert([baseProfile as any]);
+    if (baseError) console.error("Error creating doctor base profile:", baseError);
+
+    // Create doctor sub-profile
+    const doctorProfilePayload = {
+      user_id: data.user.id,
+      phone: profileData.phone,
+      age: profileData.age,
+      medical_license_id: profileData.medicalLicenseId,
+      medical_college: profileData.medicalCollege,
+      experience_years: profileData.experienceYears,
+      hospital_name: profileData.hospitalName,
+      specialization: profileData.specialization || 'Cardiology',
+      medical_document_url: profileData.medicalDocumentUrl || '',
+      verification_status: 'pending'
+    };
+    const { error: doctorProfileError } = await supabase.from('doctor_profiles').insert([doctorProfilePayload as any]);
+    if (doctorProfileError) console.error("Error creating doctor sub-profile:", doctorProfileError);
+
+    // Create legacy doctor record for backwards compatibility
+    const legacyDoctorPayload = {
+      user_id: data.user.id,
+      specialization: profileData.specialization || 'Cardiology',
+      license_number: profileData.medicalLicenseId,
+      hospital_name: profileData.hospitalName,
+      availability: true
+    };
+    const { error: legacyError } = await supabase.from('doctors').insert([legacyDoctorPayload as any]);
+    if (legacyError) console.error("Error creating legacy doctor:", legacyError);
+
+    showToast("Doctor Verification Uploaded", "success");
+  };
+
   const updateProfileData = React.useCallback(async (data: Partial<UserProfile>) => {
     if (!user) return;
     
-    // Map backwards compatibility fields back to Supabase schema fields
     const updateData: any = { ...data };
     if (data.displayName) updateData.full_name = data.displayName;
     
@@ -203,7 +368,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let realtimeSubscription: any = null;
 
     const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const currentUser = session?.user || null;
+      const currentUser = session?.user ? { ...session.user, uid: session.user.id } : null;
       setUser(currentUser);
       
       if (loadingTimer) {
@@ -245,19 +410,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .single();
             
         if (profileData) {
-            // Map fields for backwards compatibility
+            // Fetch role sub-profile if applicable
+            let subProfile = null;
+            if (profileData.role === 'patient') {
+              const { data } = await supabase.from('patient_profiles').select('*').eq('user_id', currentUser.id).maybeSingle();
+              subProfile = data;
+            } else if (profileData.role === 'doctor') {
+              const { data } = await supabase.from('doctor_profiles').select('*').eq('user_id', currentUser.id).maybeSingle();
+              subProfile = data;
+            }
+
             const mappedProfile: UserProfile = {
                 ...profileData,
                 uid: profileData.id,
                 email: currentUser.email || null,
-                displayName: profileData.full_name
+                displayName: profileData.full_name,
+                roleProfile: subProfile
             };
             setProfile(mappedProfile);
             try {
               localStorage.setItem('last_known_profile', safeStringify(mappedProfile));
             } catch (e) {}
             
-            // Subscribe to realtime updates for this profile
             realtimeSubscription = supabase
                 .channel(`public:profiles:id=eq.${currentUser.id}`)
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${currentUser.id}` }, (payload) => {
@@ -277,7 +451,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 })
                 .subscribe();
                 
-        } else if (error && error.code === 'PGRST116') { // Not found
+        } else if (error && error.code === 'PGRST116') {
              console.log("Creating missing profile");
              let roleToAssign: 'patient' | 'doctor' | null = 'patient';
              try {
@@ -290,18 +464,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
              
              const newProfile = {
                  id: currentUser.id,
+                 user_id: currentUser.id,
+                 email: currentUser.email || '',
                  role: roleToAssign,
                  full_name: currentUser.user_metadata?.full_name || 'Medical Node',
-                 status: 'approved',
-                 onboarded: false,
-                 onboardingCompleted: false
+                 avatar_url: currentUser.user_metadata?.avatar_url || ''
              };
-             await supabase.from('profiles').insert([newProfile]);
+             await supabase.from('profiles').insert([newProfile as any]);
+
+             let subProfile = null;
+             if (roleToAssign === 'patient') {
+               const ppPayload = { user_id: currentUser.id, phone: '', age: null, gender: '', blood_group: '' };
+               await supabase.from('patient_profiles').insert([ppPayload as any]);
+               
+               const legacyPatient = { user_id: currentUser.id, gender: '', blood_group: '' };
+               await supabase.from('patients').insert([legacyPatient as any]);
+             } else if (roleToAssign === 'doctor') {
+               const dpPayload = { user_id: currentUser.id, phone: '', age: null, specialization: 'Cardiology', verification_status: 'pending' };
+               await supabase.from('doctor_profiles').insert([dpPayload as any]);
+               
+               const legacyDoctor = { user_id: currentUser.id, specialization: 'Cardiology', availability: true };
+               await supabase.from('doctors').insert([legacyDoctor as any]);
+             }
+
              const mappedProfile: UserProfile = {
                  ...newProfile,
                  uid: newProfile.id,
                  email: currentUser.email || null,
-                 displayName: newProfile.full_name
+                 displayName: newProfile.full_name,
+                 roleProfile: subProfile
              } as UserProfile;
              setProfile(mappedProfile);
         }
@@ -319,7 +510,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
 
-    // Check current session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
         if (!session) {
             setLoading(false);
@@ -333,19 +523,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const value = React.useMemo(() => ({ 
-    user, 
-    profile, 
-    loading, 
+  const value = React.useMemo(() => ({
+    user,
+    profile,
+    loading,
     isOnline,
-    toast, 
-    showToast, 
+    toast,
+    showToast,
     updateProfileData,
     login,
     loginWithGoogle,
     resetPassword,
     signup,
-    logout 
+    signupPatient,
+    signupDoctor,
+    logout
   }), [user, profile, loading, isOnline, toast]);
 
   return (

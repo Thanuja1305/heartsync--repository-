@@ -37,13 +37,18 @@ const DoctorLogin = () => {
   React.useEffect(() => {
     if (!authLoading && user) {
       if (profile?.role === 'doctor') {
-        navigate('/doctor/dashboard');
+        const status = profile.roleProfile?.verification_status || 'pending';
+        if (status === 'approved') {
+          navigate('/doctor-dashboard');
+        } else {
+          navigate('/doctor-verification-pending');
+        }
       } else if (profile?.role === 'patient') {
-        navigate('/patient/dashboard');
+        navigate('/patient-dashboard');
       } else if (profile?.role === 'admin') {
         navigate('/admin');
       } else {
-        navigate('/select-role');
+        navigate('/auth');
       }
     }
   }, [user, profile, authLoading, navigate]);
@@ -342,8 +347,8 @@ const DoctorLogin = () => {
 
           <div className="mt-12 text-center border-t border-slate-50 pt-8">
             <p className="text-sm font-bold text-slate-400">
-              New medical practitioner? <br />
-              <Link to="/signup" className="text-accent-maroon hover:underline font-black uppercase tracking-widest text-xs mt-2 inline-block">Register Board Account</Link>
+              Don't have a doctor account? <br />
+              <Link to="/doctor-signup" className="text-accent-maroon hover:underline font-black uppercase tracking-widest text-xs mt-2 inline-block">Create Doctor Account</Link>
             </p>
           </div>
         </motion.div>

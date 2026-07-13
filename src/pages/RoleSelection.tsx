@@ -31,14 +31,7 @@ const RoleSelection = () => {
     if (user && !profile?.role) {
       setLoading(true);
       try {
-        const { setDoc, doc, serverTimestamp } = await import('firebase/firestore');
-        const { db } = await import('../lib/firebase');
-        
-        await setDoc(doc(db, 'users', user.uid), {
-          role,
-          status: 'approved',
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+        await updateProfileData({ role });
 
         showToast(`${role} profile initialized`, 'success');
         

@@ -83,7 +83,7 @@ const Navbar = () => {
         {/* Right Side: Auth Buttons */}
         <div className="hidden lg:flex items-center gap-6">
           <Link 
-            to="/select-role" 
+            to="/auth" 
             className="text-xs font-bold text-dark-navy/80 hover:text-accent-maroon uppercase tracking-widest transition-colors"
           >
             Sign In
@@ -134,7 +134,7 @@ const Navbar = () => {
                   Get Started
                 </Link>
                 <Link 
-                  to="/select-role" 
+                  to="/auth" 
                   onClick={() => setIsOpen(false)}
                   className="text-center py-4 text-xs font-black uppercase tracking-widest text-dark-navy/60"
                 >
