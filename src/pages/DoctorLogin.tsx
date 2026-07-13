@@ -17,9 +17,7 @@ import {
   Medal
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { signInWithPopup, signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, googleProvider, db } from '../lib/firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+
 
 const DoctorLogin = () => {
   const [email, setEmail] = useState('');
@@ -50,50 +48,7 @@ const DoctorLogin = () => {
     }
   }, [user, profile, authLoading, navigate]);
 
-  const handlePostAuth = async (authUser: any) => {
-    if (!authUser) return;
-    try {
-      const userRef = doc(db, 'users', authUser.uid);
-      const userDoc = await getDoc(userRef);
-      const userData = userDoc.exists() ? userDoc.data() : null;
 
-      if (!userData || !userData.role) {
-        const newUser = {
-          uid: authUser.uid,
-          fullName: authUser.displayName || 'Doctor Name',
-          email: authUser.email,
-          role: 'doctor',
-          createdAt: serverTimestamp(),
-          profileCompleted: false,
-          photoURL: authUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${authUser.uid}`,
-          medicalLicenseId: licenseId,
-          hospitalName: hospital
-        };
-        
-        await setDoc(userRef, newUser, { merge: true });
-        await setDoc(doc(db, 'doctors', authUser.uid), {
-          uid: authUser.uid,
-          email: authUser.email,
-          fullName: newUser.fullName,
-          verified: false,
-          status: 'PENDING_VERIFICATION',
-          createdAt: serverTimestamp()
-        }, { merge: true });
-
-        navigate('/doctor/registration');
-        return;
-      }
-
-      if (userData.role === 'doctor') {
-        navigate('/doctor/dashboard');
-      } else {
-        showToast('This account is registered as a Patient. Please use the Patient Portal.', 'error');
-        await auth.signOut();
-      }
-    } catch (err: any) {
-      showToast('Clinical access verification failed', 'error');
-    }
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,7 +93,7 @@ const DoctorLogin = () => {
     setLoading(true);
     setError('');
     try {
-      await loginWithGoogle();
+      await loginWithGoogle('doctor');
     } catch (err: any) {
       setError(err.message || 'Clinical SSO failed.');
     } finally {

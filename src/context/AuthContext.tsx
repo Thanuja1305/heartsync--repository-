@@ -31,7 +31,7 @@ interface AuthContextType {
   showToast: (message: string, type: 'success' | 'error') => void;
   updateProfileData: (data: Partial<UserProfile>) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
+  loginWithGoogle: (intendedRole?: 'patient' | 'doctor') => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signup: (email: string, password: string, fullName: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -108,7 +108,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     showToast("Node Link Established", "success");
   };
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (intendedRole?: 'patient' | 'doctor') => {
+    if (intendedRole) {
+      try {
+        localStorage.setItem('intended_role', intendedRole);
+      } catch (e) { console.warn('Could not save intended_role to localStorage'); }
+    }
     const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
     if (error) {
       console.error("Google Auth Error:", error);
@@ -274,9 +279,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 
         } else if (error && error.code === 'PGRST116') { // Not found
              console.log("Creating missing profile");
+             let roleToAssign: 'patient' | 'doctor' | null = 'patient';
+             try {
+               const savedRole = localStorage.getItem('intended_role');
+               if (savedRole === 'patient' || savedRole === 'doctor') {
+                 roleToAssign = savedRole;
+                 localStorage.removeItem('intended_role');
+               }
+             } catch(e) {}
+             
              const newProfile = {
                  id: currentUser.id,
-                 role: 'patient',
+                 role: roleToAssign,
                  full_name: currentUser.user_metadata?.full_name || 'Medical Node',
                  status: 'approved',
                  onboarded: false,

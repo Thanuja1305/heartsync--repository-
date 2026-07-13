@@ -15,9 +15,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { signInWithPopup, signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, googleProvider, db, handleFirestoreError, OperationType, parseFirestoreError } from '../lib/firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+
 
 const PatientLogin = () => {
   const [email, setEmail] = useState('');
@@ -47,71 +45,7 @@ const PatientLogin = () => {
     }
   }, [user, profile, authLoading, navigate]);
 
-  const handlePostAuth = async (authUser: any) => {
-    if (!authUser) return;
 
-    let retries = 3;
-    let delay = 1000;
-
-    const fetchProfile = async () => {
-      try {
-        const userRef = doc(db, 'users', authUser.uid);
-        const userDoc = await getDoc(userRef);
-        return { userDoc, userRef };
-      } catch (err: any) {
-        if (err.message?.includes('offline') && retries > 0) {
-          retries--;
-          await new Promise(r => setTimeout(r, delay));
-          delay *= 2;
-          return fetchProfile();
-        }
-        throw err;
-      }
-    };
-
-    try {
-      const { userDoc, userRef } = await fetchProfile();
-      const userData = userDoc.exists() ? userDoc.data() : null;
-
-      if (!userData || !userData.role) {
-        // Create new user record
-        const newUser = {
-          uid: authUser.uid,
-          fullName: authUser.displayName || 'Patient Name',
-          email: authUser.email,
-          role: 'patient',
-          createdAt: serverTimestamp(),
-          profileCompleted: false,
-          onboardingCompleted: false,
-          photoURL: authUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${authUser.uid}`
-        };
-        
-        await setDoc(userRef, newUser, { merge: true });
-        await setDoc(doc(db, 'patients', authUser.uid), {
-          uid: authUser.uid,
-          email: authUser.email,
-          fullName: newUser.fullName,
-          status: 'ACTIVE',
-          createdAt: serverTimestamp()
-        }, { merge: true });
-
-        navigate('/patient/onboarding');
-        return;
-      }
-
-      if (userData.role === 'patient') {
-        navigate('/patient/dashboard');
-      } else if (userData.role === 'doctor') {
-        showToast('This account is registered as a Cardiologist. Please use the Doctor Portal.', 'error');
-        await auth.signOut();
-      } else {
-        navigate('/select-role');
-      }
-    } catch (err: any) {
-      console.error('Error fetching role:', err);
-      showToast('Authentication check failed', 'error');
-    }
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -156,7 +90,7 @@ const PatientLogin = () => {
     setLoading(true);
     setError('');
     try {
-      await loginWithGoogle();
+      await loginWithGoogle('patient');
     } catch (err: any) {
       setError(err.message || 'Google synchronization failed.');
     } finally {
