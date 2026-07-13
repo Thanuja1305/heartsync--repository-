@@ -80,7 +80,7 @@ async function startServer() {
     return {
       accountSid: process.env.TWILIO_ACCOUNT_SID || "",
       authToken: process.env.TWILIO_AUTH_TOKEN || "",
-      phoneNumber: process.env.TWILIO_PHONE_NUMBER || "+18157654866"
+      phoneNumber: process.env.TWILIO_PHONE_NUMBER || ""
     };
   };
 
@@ -113,9 +113,9 @@ async function startServer() {
 
       const messageContent = `🚨 EMERGENCY ALERT 🚨\n\nPatient is in critical condition.\n\nPatient Name: ${nameVal}\nHeart Rate: ${hrVal} BPM\nSPO2: ${spo2Val}%\nTemperature: ${tempVal}°C\nStatus: HIGH RISK\n\nImmediate medical attention required.`;
 
-      const toFamily = "whatsapp:+917569824148";
-      const toAmbulance = "whatsapp:+919573732216";
-      const fromWhatsapp = "whatsapp:+14155238886";
+      const toFamily = `whatsapp:${process.env.EMERGENCY_FAMILY_NUMBER || ""}`;
+      const toAmbulance = `whatsapp:${process.env.EMERGENCY_AMBULANCE_NUMBER || ""}`;
+      const fromWhatsapp = `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || ""}`;
 
       console.log(`[TWILIO WHATSAPP] Sending alert from ${fromWhatsapp} to Family and Ambulance...`);
 
@@ -160,7 +160,7 @@ async function startServer() {
       const twilioLib = twilio as any;
       const client = twilioLib.default ? twilioLib.default(config.accountSid, config.authToken) : twilio(config.accountSid, config.authToken);
 
-      const ambulanceNumber = "9573732216";
+      const ambulanceNumber = process.env.EMERGENCY_AMBULANCE_NUMBER || "";
       const formattedTo = ambulanceNumber.startsWith("+") ? ambulanceNumber : `+91${ambulanceNumber}`;
 
       console.log(`[TWILIO VOICE] Calling Ambulance at ${formattedTo}...`);

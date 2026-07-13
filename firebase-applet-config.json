@@ -1,10 +1,10 @@
 {
-  "projectId": "brilliant-observer-ctgzl",
-  "appId": "1:368808691828:web:dae8faaba55482c789e921",
-  "apiKey": "AIzaSyBw7vNIJ_tDogV4zTN9eR90OmGZR7hBwNE",
-  "authDomain": "brilliant-observer-ctgzl.firebaseapp.com",
-  "firestoreDatabaseId": "remixed-firestore-database-id",
-  "storageBucket": "brilliant-observer-ctgzl.firebasestorage.app",
-  "messagingSenderId": "368808691828",
+  "projectId": "",
+  "appId": "",
+  "apiKey": "",
+  "authDomain": "",
+  "firestoreDatabaseId": "",
+  "storageBucket": "",
+  "messagingSenderId": "",
   "measurementId": ""
 }
