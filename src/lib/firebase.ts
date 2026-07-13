@@ -25,7 +25,8 @@ export enum OperationType {
   READ = 'read',
   WRITE = 'write',
   DELETE = 'delete',
-  QUERY = 'query'
+  QUERY = 'query',
+  GET = 'get'
 }
 
 export const handleFirestoreError = (err: any, op: any, context: any) => {};
