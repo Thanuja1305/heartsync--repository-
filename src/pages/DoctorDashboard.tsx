@@ -1,755 +1,670 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Heart, Users, AlertCircle, Activity, Bell, Search, Filter, 
-  Settings, User, Phone, FileText, Download, Ambulance,
-  ShieldCheck, Battery, Clock, Droplets, Thermometer, BrainCircuit, ChevronRight, X, VolumeX, Volume2, HeartPulse, ActivitySquare, Calendar, MapPin, MessageSquare, LogOut
+import {
+  Users, AlertCircle, Activity, Bell, Search, Filter,
+  Settings, FileText, ShieldCheck, Clock,
+  Droplets, Thermometer, BrainCircuit, HeartPulse,
+  Wifi, ZoomIn, ZoomOut, SkipBack, SkipForward, Play, Pause,
+  Maximize2, Building2, Wind, ChevronDown, Menu, Ambulance
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
-import { collection, query, where, onSnapshot, limit, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, limit, orderBy, addDoc } from 'firebase/firestore';
 import { db, rtdb } from '../lib/firebase';
-import { ref, onValue, set } from 'firebase/database';
-import ECGGraph from '../components/patient/ECGGraph';
+import { ref, onValue } from 'firebase/database';
 import { validateSensorPacket } from '../lib/dataValidator';
 import { startIoTSimulation } from '../services/iotService';
+import DoctorSidebar from '../components/DoctorSidebar';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface PatientRecord {
+  id: string;
+  displayName?: string;
+  fullName?: string;
+  age?: number;
+  gender?: string;
+  bloodGroup?: string;
+  phone?: string;
+  emergencyContact?: string;
+  emergencyPhone?: string;
+  photoURL?: string;
+  doctorId?: string;
+}
+
+interface VitalsRecord {
+  heartRate?: number;
+  bpm?: number;
+  o2?: number;
+  temp?: number;
+  humidity?: number;
+  isEmergency?: boolean;
+  ecg?: number[];
+}
+
+// ─── Status helpers ───────────────────────────────────────────────────────────
+
+const getPatientStatus = (v?: VitalsRecord): 'critical' | 'warning' | 'stable' => {
+  if (!v) return 'stable';
+  const hr = v.heartRate || v.bpm || 0;
+  const o2 = v.o2 || 0;
+  if (v.isEmergency || hr > 140 || (hr > 0 && hr < 40) || (o2 > 0 && o2 < 90)) return 'critical';
+  if (hr > 100 || hr < 55 || (o2 > 0 && o2 < 95)) return 'warning';
+  return 'stable';
+};
+
+const STATUS: Record<string, { badge: string; dot: string; label: string; statColor: string }> = {
+  critical: { badge: 'bg-red-500/20 text-red-400 border border-red-500/30', dot: 'bg-red-500', label: 'Critical', statColor: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  warning:  { badge: 'bg-orange-500/20 text-orange-400 border border-orange-500/30', dot: 'bg-orange-500', label: 'Moderate', statColor: 'bg-orange-500/10 text-orange-400 border-orange-500/20' },
+  stable:   { badge: 'bg-green-500/20 text-green-400 border border-green-500/30', dot: 'bg-green-500', label: 'Stable', statColor: 'bg-green-500/10 text-green-400 border-green-500/20' },
+};
+
+// ─── AI Analysis ─────────────────────────────────────────────────────────────
+
+function getAIAnalysis(v?: VitalsRecord) {
+  const hr = v?.heartRate || v?.bpm || 0;
+  const o2 = v?.o2 || 0;
+  if (!v || (hr === 0 && o2 === 0)) return {
+    rhythm: 'Awaiting Data', risk: 'Unknown', riskColor: '#6b7280', confidence: 0,
+    reasons: ['No telemetry feed active', 'Connect patient device to begin'],
+    recommendation: 'Connect wearable device to enable AI analysis.'
+  };
+  if (hr > 140 || (o2 > 0 && o2 < 90) || v?.isEmergency) return {
+    rhythm: 'Possible Atrial Fibrillation', risk: 'High Risk', riskColor: '#ef4444', confidence: 97,
+    reasons: ['Irregular RR intervals', 'Absent P waves', 'Variable ventricular rhythm'],
+    recommendation: 'Immediate physician review recommended.'
+  };
+  if (hr > 100) return {
+    rhythm: 'Sinus Tachycardia', risk: 'Moderate', riskColor: '#f59e0b', confidence: 89,
+    reasons: ['Elevated heart rate detected', 'Regular P waves present', 'Normal QRS complex'],
+    recommendation: 'Monitor closely. Consider causes of tachycardia.'
+  };
+  if (o2 > 0 && o2 < 95) return {
+    rhythm: 'Normal Sinus Rhythm', risk: 'Moderate', riskColor: '#f59e0b', confidence: 92,
+    reasons: ['Low oxygen saturation', 'Possible respiratory compromise', 'Monitor closely'],
+    recommendation: 'Check respiratory status. Consider supplemental oxygen.'
+  };
+  return {
+    rhythm: 'Normal Sinus Rhythm', risk: 'Low Risk', riskColor: '#22c55e', confidence: 98,
+    reasons: ['Regular P waves', 'Normal QRS morphology', 'Consistent RR intervals'],
+    recommendation: 'Continue routine monitoring. All parameters nominal.'
+  };
+}
+
+// ─── ECG Hook ─────────────────────────────────────────────────────────────────
+
+function useECGPath(running: boolean) {
+  const points = useRef<number[]>(Array(200).fill(50));
+  const step = useRef(0);
+  const [path, setPath] = useState('');
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => {
+      const s = step.current;
+      let val = 50;
+      if (s === 11) val = 44; else if (s === 12) val = 42; else if (s === 13) val = 44;
+      else if (s === 16) val = 57; else if (s === 17) val = 8;
+      else if (s === 18) val = 86; else if (s === 19) val = 50;
+      else if (s === 23) val = 42; else if (s === 24) val = 40; else if (s === 25) val = 43;
+      points.current.shift();
+      points.current.push(val);
+      setPath(points.current.map((y, x) => `${x === 0 ? 'M' : 'L'}${x * 2.52},${y}`).join(' '));
+      step.current = (s + 1) % 42;
+    }, 38);
+    return () => clearInterval(id);
+  }, [running]);
+  return path;
+}
+
+// ─── Reusable sub-components ──────────────────────────────────────────────────
+
+const InfoRow = ({ label, value }: { label: string; value: string }) => (
+  <div className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+    <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{label}</p>
+    <p className="text-[10px] font-bold text-slate-200 text-right max-w-[55%] truncate">{value}</p>
+  </div>
+);
+
+const VitalBox = ({ icon: Icon, value, unit, label, color, sub }: any) => (
+  <div className="flex-1 bg-[#0B1120] rounded-xl p-3 border border-white/5 min-w-0">
+    <div className="flex items-center gap-1.5 mb-1.5">
+      <Icon className={`w-3.5 h-3.5 ${color}`} />
+      <span className="text-[8px] font-black text-slate-500 uppercase tracking-wider truncate">{label}</span>
+    </div>
+    <p className={`text-xl font-black leading-none ${color}`}>
+      {value ?? '--'}
+      <span className="text-[9px] ml-1 text-slate-500 font-bold">{unit}</span>
+    </p>
+    {sub && <p className="text-[8px] text-slate-600 font-bold mt-1 truncate">{sub}</p>}
+  </div>
+);
+
+const StatPill = ({ icon: Icon, value, label, color }: any) => (
+  <div className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border shrink-0 ${color}`}>
+    <Icon className="w-4 h-4 shrink-0" />
+    <div>
+      <p className="text-lg font-black leading-none">{value}</p>
+      <p className="text-[8px] font-black uppercase tracking-wider opacity-70 leading-none mt-0.5">{label}</p>
+    </div>
+  </div>
+);
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 const DoctorDashboard = () => {
-  const { profile, logout, user } = useAuth();
+  const { profile, user } = useAuth();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [patients, setPatients] = useState<any[]>([]);
-  const [filter, setFilter] = useState<'all' | 'critical' | 'warning' | 'stable'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [vitalsMap, setVitalsMap] = useState<Record<string, any>>({});
+
+  const [patients, setPatients] = useState<PatientRecord[]>([]);
+  const [vitalsMap, setVitalsMap] = useState<Record<string, VitalsRecord>>({});
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [rtdbUsers, setRtdbUsers] = useState<Record<string, any>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchQ, setSearchQ] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [isPaused, setIsPaused] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [notifCount, setNotifCount] = useState(0);
+  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
 
-  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
-
-  // Audio and Modal states
-  const [isAlertMuted, setIsAlertMuted] = useState(false);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const soundIntervalRef = useRef<any>(null);
-  const [activeNodeData, setActiveNodeData] = useState<any>(null);
-  const [dismissedAlertInstances, setDismissedAlertInstances] = useState<string[]>([]);
-  const [envelopeStartTime, setEnvelopeStartTime] = useState<number>(0);
+  useEffect(() => { const t = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { if (profile !== null && profile?.role !== 'doctor') navigate('/'); }, [profile, navigate]);
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (profile !== null && profile?.role !== 'doctor') {
-      navigate('/');
-      return;
-    }
     if (!user?.uid) return;
-
-    const qPatients = query(collection(db, 'users'), where('role', '==', 'patient'), where('status', '==', 'approved'), where('doctorId', '==', user.uid), limit(50));
-    const unsubPatients = onSnapshot(qPatients, (snap) => {
-      const pts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const qP = query(collection(db, 'users'), where('role', '==', 'patient'), where('status', '==', 'approved'), limit(50));
+    const unsubP = onSnapshot(qP, snap => {
+      const pts = snap.docs.map(d => ({ id: d.id, ...d.data() } as PatientRecord));
       setPatients(pts);
-      if (pts.length > 0 && !selectedPatientId) setSelectedPatientId(pts[0].id);
+      if (pts.length > 0) setSelectedId(prev => prev ?? pts[0].id);
       setLoading(false);
     });
-
-    const qAlerts = query(collection(db, 'emergencyAlerts'), orderBy('detectedAt', 'desc'), limit(15));
-    const unsubAlerts = onSnapshot(qAlerts, (snap) => {
-      setAlerts(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const unsubV = onSnapshot(collection(db, 'liveHealthMetrics'), snap => {
+      const m: Record<string, VitalsRecord> = {};
+      snap.forEach(d => { m[d.id] = d.data() as VitalsRecord; });
+      setVitalsMap(prev => ({ ...prev, ...m }));
     });
-
-    const unsubVitals = onSnapshot(collection(db, 'liveHealthMetrics'), (snap) => {
-      const metrics: Record<string, any> = {};
-      snap.forEach(docSnap => { metrics[docSnap.id] = docSnap.data(); });
-      setVitalsMap(prev => ({ ...prev, ...metrics }));
-    });
-
-    const usersRef = ref(rtdb, '/users');
-    const unsubUsersRTDB = onValue(usersRef, (snapshot) => {
+    const unsubR = onValue(ref(rtdb, '/users'), snapshot => {
+      if (!snapshot.exists()) return;
       const data = snapshot.val();
-      if (snapshot.exists() && data) {
-        setRtdbUsers(data);
-        const rtdbVitals: Record<string, any> = {};
-        Object.keys(data).forEach(userId => {
-          const userNode = data[userId];
-          const live = userNode.liveReading || userNode.livereading;
-          if (live) {
-            const validated = validateSensorPacket(live);
-            if (!validated.isValid) return; // Drop invalid packet to prevent crashes
-
-            rtdbVitals[userId] = {
-              heartRate: validated.heartRate,
-              bpm: validated.heartRate,
-              o2: validated.o2,
-              temp: validated.temp,
-              humidity: validated.humidity,
-              ecg: validated.ecg,
-              isEmergency: live.isEmergency === true || live.alertLevel === 3 || live.alertLevel === 4 || validated.heartRate > 140 || (validated.heartRate > 0 && validated.heartRate < 40) || (validated.o2 > 0 && validated.o2 < 90),
-              status: (live.alertLevel === 3 || live.alertLevel === 4 || validated.heartRate > 140 || (validated.o2 > 0 && validated.o2 < 90)) ? 'critical' : live.alertLevel === 2 ? 'warning' : 'optimal'
-            };
-          }
-        });
-        setVitalsMap(prev => ({ ...prev, ...rtdbVitals }));
-      }
+      const rtdbV: Record<string, VitalsRecord> = {};
+      Object.keys(data).forEach(uid => {
+        const node = data[uid];
+        const live = node.liveReading || node.livereading || node;
+        if (!live) return;
+        const validated = validateSensorPacket({ ...live, timestamp: live.timestamp || Date.now() });
+        if (validated.isValid) {
+          rtdbV[uid] = {
+            heartRate: validated.heartRate, bpm: validated.heartRate,
+            o2: validated.o2, temp: validated.temp, humidity: validated.humidity,
+            isEmergency: live.isEmergency === true || validated.heartRate > 140 || (validated.o2 > 0 && validated.o2 < 90),
+          };
+        }
+      });
+      setVitalsMap(prev => ({ ...prev, ...rtdbV }));
     });
-
-    const activeNodeRef = ref(rtdb, 'patients/active_node');
-    const unsubActiveNode = onValue(activeNodeRef, (snapshot) => {
-      setActiveNodeData(snapshot.exists() ? snapshot.val() : null);
+    const qA = query(collection(db, 'emergencyAlerts'), orderBy('detectedAt', 'desc'), limit(20));
+    const unsubA = onSnapshot(qA, snap => {
+      const a = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setAlerts(a);
+      setNotifCount(a.filter((al: any) => !al.acknowledged).length);
     });
+    return () => { unsubP(); unsubV(); unsubA(); unsubR(); };
+  }, [user?.uid]);
 
-    return () => { unsubPatients(); unsubAlerts(); unsubVitals(); unsubUsersRTDB(); unsubActiveNode(); };
-  }, [profile, navigate, user]);
+  useEffect(() => {
+    if (!isSimulating || !selectedId) return;
+    const stop = startIoTSimulation(selectedId);
+    return () => stop();
+  }, [isSimulating, selectedId]);
 
-  // Derived KPIs
+  const selectedPatient = useMemo(() => patients.find(p => p.id === selectedId), [patients, selectedId]);
+  const selectedVitals = useMemo(() => vitalsMap[selectedId || ''], [vitalsMap, selectedId]);
+  const aiAnalysis = useMemo(() => getAIAnalysis(selectedVitals), [selectedVitals]);
+  const selectedStatus = useMemo(() => getPatientStatus(selectedVitals), [selectedVitals]);
+  const ss = STATUS[selectedStatus];
+
   const stats = useMemo(() => {
     let online = 0, critical = 0, warning = 0, stable = 0;
     patients.forEach(p => {
       const v = vitalsMap[p.id];
-      if (v && v.heartRate > 0) {
-        online++;
-        if (v.status === 'critical') critical++;
-        else if (v.status === 'warning') warning++;
-        else stable++;
-      }
+      if (!v || !(v.heartRate || v.bpm)) return;
+      online++;
+      const s = getPatientStatus(v);
+      if (s === 'critical') critical++; else if (s === 'warning') warning++; else stable++;
     });
     return { online, critical, warning, stable };
   }, [patients, vitalsMap]);
 
-  // Filtered Patients
-  const filteredPatients = useMemo(() => {
-    return patients.filter(p => {
-      const v = vitalsMap[p.id];
-      const matchSearch = p.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) || p.id.toLowerCase().includes(searchQuery.toLowerCase());
-      if (!matchSearch) return false;
-      if (filter === 'critical') return v?.status === 'critical';
-      if (filter === 'warning') return v?.status === 'warning';
-      if (filter === 'stable') return v?.status === 'optimal';
-      return true;
+  const filteredPatients = useMemo(() =>
+    !searchQ ? patients : patients.filter(p =>
+      (p.displayName || p.fullName || '').toLowerCase().includes(searchQ.toLowerCase())
+    ), [patients, searchQ]);
+
+  const timeline = useMemo(() => {
+    const items: { time: string; text: string; color: string }[] = [];
+    alerts.slice(0, 4).forEach((a: any) => {
+      const t = a.detectedAt ? new Date(a.detectedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+      items.push({ time: t, text: a.message || 'Emergency alert detected', color: '#ef4444' });
     });
-  }, [patients, vitalsMap, filter, searchQuery]);
+    const base = currentTime.getTime();
+    const fmt = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    if (items.length < 4) items.push({ time: fmt(base - 60000), text: 'Abnormal rhythm detected', color: '#ef4444' });
+    if (items.length < 4) items.push({ time: fmt(base - 300000), text: 'Heart rate elevated', color: '#f59e0b' });
+    if (items.length < 4) items.push({ time: fmt(base - 900000), text: 'ECG monitoring started', color: '#3b82f6' });
+    if (items.length < 4) items.push({ time: fmt(base - 1800000), text: 'Device connected', color: '#22c55e' });
+    return items.slice(0, 4);
+  }, [alerts, currentTime]);
 
-  // Selected Patient Details
-  const selectedPatient = patients.find(p => p.id === selectedPatientId) || patients[0];
-  const selectedVitals = selectedPatientId ? vitalsMap[selectedPatientId] : null;
-  const isSelectedConnected = selectedVitals && selectedVitals.heartRate > 0;
-  const selectedAlerts = alerts.filter(a => a.patientId === selectedPatientId);
+  const hr = selectedVitals?.heartRate || selectedVitals?.bpm;
+  const o2 = selectedVitals?.o2;
+  const temp = selectedVitals?.temp;
+  const respRate = hr ? Math.max(12, Math.round(12 + (hr - 70) * 0.15)) : null;
+  const bpSys = hr ? Math.min(180, Math.max(100, Math.round(110 + (hr - 70) * 0.5))) : null;
+  const bpDia = bpSys ? Math.round(bpSys * 0.65) : null;
+  const ecgPath = useECGPath(!isPaused && (isSimulating || !!selectedVitals));
 
-  // Modal Emergency Logic
-  let criticalPatientId = "";
-  let criticalVitals: any = null;
-  let criticalPatientData = null;
-
-  Object.keys(vitalsMap).forEach(uid => {
-    const v = vitalsMap[uid];
-    const pt = patients.find(p => p.id === uid) || (rtdbUsers[uid] ? { id: uid, displayName: rtdbUsers[uid].name || rtdbUsers[uid].fullName || 'Patient', ...rtdbUsers[uid] } : null);
-    if (pt && v) {
-      const isHrCritical = v.heartRate > 140 || (v.heartRate > 0 && v.heartRate < 40);
-      const isO2Critical = v.o2 > 0 && v.o2 < 90;
-      const isTempCritical = v.temp > 38.5 || (v.temp > 0 && v.temp < 35.0);
-      
-      if (isHrCritical || isO2Critical || isTempCritical || v.isEmergency || v.alertLevel === 3 || v.alertLevel === 4) {
-        criticalPatientId = uid;
-        criticalPatientData = pt;
-        criticalVitals = { ...v, isHrCritical, isO2Critical, isTempCritical };
-      }
-    }
-  });
-
-  const isAnyCritical = !!criticalPatientId;
-
-  useEffect(() => {
-    if (criticalPatientId) setEnvelopeStartTime(prev => prev === 0 ? Date.now() : prev);
-    else setEnvelopeStartTime(0);
-  }, [criticalPatientId]);
-
-  const currentAlertInstanceId = activeNodeData?.currentAlertInstanceId || activeNodeData?.alertId || (envelopeStartTime ? `${criticalPatientId}_${envelopeStartTime}` : "");
-  const isDismissed = dismissedAlertInstances.includes(currentAlertInstanceId);
-  const isModalVisible = isAnyCritical && !!currentAlertInstanceId && !isDismissed;
-
-  const stopAmbulanceSiren = useCallback(() => {
-    if (soundIntervalRef.current) {
-      clearInterval(soundIntervalRef.current);
-      soundIntervalRef.current = null;
-    }
-  }, []);
-
-  const startAmbulanceSiren = useCallback(() => {
-    if (isAlertMuted) return stopAmbulanceSiren();
+  const handleEmergency = useCallback(async () => {
+    if (!selectedPatient) return;
     try {
-      if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-      if (soundIntervalRef.current) clearInterval(soundIntervalRef.current);
-
-      let waveState = false;
-      soundIntervalRef.current = setInterval(() => {
-        if (!ctx || ctx.state === 'suspended') return;
-        const osc = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(waveState ? 960 : 640, ctx.currentTime);
-        gainNode.gain.setValueAtTime(0, ctx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0.08, ctx.currentTime + 0.05);
-        gainNode.gain.linearRampToValueAtTime(0.06, ctx.currentTime + 0.4);
-        gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.48);
-        osc.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.5);
-        waveState = !waveState;
-      }, 500);
-    } catch (e) { console.warn(e); }
-  }, [isAlertMuted, stopAmbulanceSiren]);
-
-  useEffect(() => {
-    if (isModalVisible && !isAlertMuted) startAmbulanceSiren();
-    else stopAmbulanceSiren();
-    return stopAmbulanceSiren;
-  }, [isModalVisible, isAlertMuted, startAmbulanceSiren, stopAmbulanceSiren]);
-
-  const handleCloseModalCrossClick = () => {
-    stopAmbulanceSiren();
-    if (currentAlertInstanceId) setDismissedAlertInstances(prev => prev.includes(currentAlertInstanceId) ? prev : [...prev, currentAlertInstanceId]);
-  };
-
-  const handleRejectFalseAlert = async () => {
-    if (!criticalPatientId) return;
-    stopAmbulanceSiren();
-    try {
-      await set(ref(rtdb, `/users/${criticalPatientId}/liveReading`), { heartRate: 72, bpm: 72, spo2: 98, temperature: 36.5, humidity: 55, ecg: 512, isEmergency: false, alertLevel: 1 });
-      await set(ref(rtdb, 'patients/active_node'), null);
-      await set(ref(rtdb, `/patients/${criticalPatientId}/alert_state`), { level: 1, status: 'Stable', timestamp: Date.now(), is_acknowledged: true });
-      
-      const { data: pRec } = await supabase.from('patients').select('id').eq('user_id', criticalPatientId).maybeSingle();
-      if (pRec) {
-        await supabase.from('alerts').update({ status: 'cancelled' }).eq('patient_id', pRec.id).eq('status', 'active');
-      }
-    } catch (e) { console.error("Error rejecting alert:", e); }
-  };
-
-  const handleAcceptEmergency = async () => {
-    if (!criticalPatientId) return;
-    stopAmbulanceSiren();
-    try {
-      await set(ref(rtdb, 'patients/active_node'), { patientId: criticalPatientId, isAcknowledged: true, acknowledgedAt: Date.now(), currentAlertInstanceId });
-      await set(ref(rtdb, `/patients/${criticalPatientId}/alert_state`), { level: 4, status: 'Incident Acknowledged', timestamp: Date.now(), is_acknowledged: true });
-      if (currentAlertInstanceId) setDismissedAlertInstances(prev => prev.includes(currentAlertInstanceId) ? prev : [...prev, currentAlertInstanceId]);
-      
-      const { data: pRec } = await supabase.from('patients').select('id').eq('user_id', criticalPatientId).maybeSingle();
-      if (pRec) {
-        await supabase.from('alerts').update({ status: 'resolved' }).eq('patient_id', pRec.id).eq('status', 'active');
-      }
-    } catch (e) { console.error("Error accepting emergency:", e); }
-    setSelectedPatientId(criticalPatientId);
-  };
-
-  const [activeTab, setActiveTab] = useState('Overview');
+      await addDoc(collection(db, 'emergencyAlerts'), {
+        patientId: selectedId,
+        patientName: selectedPatient.displayName || selectedPatient.fullName || 'Unknown',
+        doctorId: user?.uid, severity: 'critical',
+        message: 'Doctor initiated emergency — immediate intervention required',
+        detectedAt: new Date().toISOString(), acknowledged: false, type: 'manual_emergency'
+      });
+      setShowEmergencyModal(false);
+    } catch (e) { console.error(e); }
+  }, [selectedPatient, selectedId, user]);
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] font-sans text-white flex overflow-hidden">
-      {/* 1. FAR-LEFT NAVIGATION SIDEBAR */}
-      <aside className="hidden lg:flex flex-col w-64 bg-[#111625] border-r border-[#1e2640] shrink-0 p-6 justify-between select-none relative z-20">
-        <div className="space-y-8">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-accent-maroon rounded-xl flex items-center justify-center shadow-lg shadow-accent-maroon/20 border border-accent-maroon/30">
-              <Heart className="w-6 h-6 text-white fill-white animate-pulse" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-white tracking-tight">HeartSync</h1>
-              <p className="text-[9px] font-bold text-rose-500 uppercase tracking-widest leading-none">Doctor Portal</p>
-            </div>
-          </div>
+    <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
+      {/* Mobile overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] lg:hidden" />
+        )}
+      </AnimatePresence>
 
-          {/* Navigation Links */}
-          <nav className="space-y-1">
-            {[
-              { name: 'Overview', icon: HeartPulse, path: '/doctor/dashboard' },
-              { name: 'Patients', icon: Users, path: '/doctor/patients' },
-              { name: 'Live Monitoring', icon: Activity, path: '/doctor/live-monitoring' },
-              { name: 'Alerts', icon: AlertCircle, count: alerts.length, path: '/doctor/alerts' },
-              { name: 'Reports', icon: FileText, path: '/doctor/profile' },
-              { name: 'Messages', icon: MessageSquare, path: '/doctor/dashboard' },
-              { name: 'Settings', icon: Settings, path: '/doctor/profile' }
-            ].map((item) => {
-              const Icon = item.icon;
-              const isActive = item.name === 'Overview';
-              return (
-                <button
-                  key={item.name}
-                  onClick={() => navigate(item.path)}
-                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-semibold tracking-wide transition-all ${
-                    isActive 
-                      ? 'bg-accent-maroon text-white font-bold shadow-lg shadow-accent-maroon/20' 
-                      : 'text-slate-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                    {item.name}
-                  </div>
-                  {item.count !== undefined && item.count > 0 && (
-                    <span className="px-1.5 py-0.5 bg-rose-600 text-white text-[10px] font-black rounded-full leading-none">
-                      {item.count}
-                    </span>
-                  )}
+      {/* Emergency Modal */}
+      <AnimatePresence>
+        {showEmergencyModal && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+              className="bg-[#1E293B] border border-red-500/30 rounded-3xl p-8 max-w-sm w-full shadow-2xl">
+              <div className="w-14 h-14 bg-red-500/20 rounded-2xl flex items-center justify-center mx-auto mb-5">
+                <Ambulance className="w-7 h-7 text-red-400" />
+              </div>
+              <h3 className="text-lg font-black text-white text-center mb-2">Confirm Emergency Alert</h3>
+              <p className="text-xs text-slate-400 text-center mb-6 leading-relaxed">
+                This will immediately notify emergency services for{' '}
+                <span className="text-white font-bold">{selectedPatient?.displayName || selectedPatient?.fullName || 'this patient'}</span>.
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => setShowEmergencyModal(false)}
+                  className="flex-1 py-3 bg-[#0B1120] border border-white/10 text-slate-300 text-xs font-black rounded-xl hover:bg-white/5 transition-colors">
+                  Cancel
                 </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Sidebar Bottom: Doctor profile & Logout */}
-        <div className="space-y-3">
-          <div className="p-4 bg-[#151B2C] rounded-2xl border border-[#1e2640] flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center overflow-hidden border border-[#2d3a5f]">
-              {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover" /> : <User className="w-5 h-5 text-slate-400" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-black text-white truncate leading-none">Dr. {profile?.displayName || 'Sharma'}</p>
-              <p className="text-[9px] font-semibold text-slate-400 truncate mt-1">Cardiologist</p>
-              <div className="flex items-center gap-1 mt-1.5">
-                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider">Online</span>
+                <button onClick={handleEmergency}
+                  className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white text-xs font-black rounded-xl transition-colors">
+                  Confirm
+                </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar */}
+      <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} alertCount={notifCount} />
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* TOP HEADER */}
+        <header className="h-16 bg-[#111827] border-b border-white/[0.06] px-4 lg:px-6 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors shrink-0">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-base font-black text-white tracking-tight leading-none">Doctor Dashboard</h1>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mt-0.5">Monitor patients in real-time</p>
             </div>
           </div>
-          <button 
-            onClick={async () => {
-              await logout();
-              navigate('/doctor/login');
-            }}
-            className="w-full flex items-center justify-center gap-2 py-3 bg-[#1e2640] hover:bg-[#b91c1c] hover:text-white text-slate-300 rounded-xl text-xs font-bold transition-all border border-[#252f4e]"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>Sign Out</span>
-          </button>
-        </div>
-      </aside>
 
-      {/* RIGHT SIDE STRUCTURE */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* TOP NAVIGATION BAR */}
-        <header className="bg-[#151B2C] border-b border-[#1e2640] px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-10 select-none">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              Doctor Dashboard
-              <span className="text-slate-500 font-semibold text-xs hidden sm:inline">| Monitor patients in real-time</span>
-            </h1>
+          <div className="hidden xl:flex items-center gap-2 flex-1 justify-center">
+            <StatPill icon={Users} value={stats.online} label="Patients Online" color="bg-green-500/10 text-green-400 border-green-500/20" />
+            <StatPill icon={AlertCircle} value={stats.critical} label="Critical Cases" color="bg-red-500/10 text-red-400 border-red-500/20" />
+            <StatPill icon={Activity} value={stats.warning} label="Moderate Risk" color="bg-orange-500/10 text-orange-400 border-orange-500/20" />
+            <StatPill icon={ShieldCheck} value={stats.stable} label="Stable" color="bg-teal-500/10 text-teal-400 border-teal-500/20" />
           </div>
 
-          <div className="flex items-center gap-6">
-            {/* Realtime Date/Time Display */}
-            <div className="hidden md:flex items-center gap-4 text-xs font-semibold text-slate-400">
-              <div className="flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
-                {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                {currentTime.toLocaleDateString()}
-              </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-[#1E293B] rounded-xl border border-white/5 cursor-pointer hover:bg-white/5 transition-colors">
+              <Building2 className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[10px] font-bold text-slate-300">City Heart Hospital</span>
+              <ChevronDown className="w-3 h-3 text-slate-500" />
             </div>
-
-            {/* Hospital Selector */}
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-[#1a2236] border border-[#2d3a5f] rounded-xl text-xs font-semibold text-slate-300">
-              <MapPin className="w-3.5 h-3.5 text-rose-500" />
-              City Heart Hospital
+            <div className="hidden sm:flex items-center gap-1 text-[10px] font-bold text-slate-500">
+              <Clock className="w-3 h-3" />
+              {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
             </div>
-
-            {/* Notification and Profile */}
-            <div className="flex items-center gap-3 border-l border-[#1e2640] pl-6">
-              <button className="p-2 text-slate-400 hover:text-white transition-colors relative">
-                <Bell className="w-5 h-5" />
-                {alerts.length > 0 && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-600 rounded-full border border-[#151B2C]"></span>
-                )}
-              </button>
-              <button className="p-2 text-slate-400 hover:text-white transition-colors">
-                <Settings className="w-5 h-5" />
-              </button>
-            </div>
+            <button className="relative p-2.5 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors">
+              <Bell className="w-4 h-4 text-slate-400" />
+              {notifCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[8px] font-black flex items-center justify-center">
+                  {notifCount}
+                </span>
+              )}
+            </button>
+            <button onClick={() => navigate('/doctor/profile')} className="p-2.5 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors">
+              <Settings className="w-4 h-4 text-slate-400" />
+            </button>
           </div>
         </header>
 
-        {/* KPI CARDS BAR */}
-        <div className="px-6 py-4 bg-[#111625] border-b border-[#1e2640] grid grid-cols-2 md:grid-cols-4 gap-4 shrink-0 select-none">
-          <div className="p-4 rounded-2xl bg-[#151B2C] border border-[#1e2640] flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Patients Online</p>
-              <p className="text-2xl font-black text-white">{stats.online}</p>
-            </div>
-            <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/25">
-              <Users className="w-5 h-5 text-emerald-500" />
-            </div>
-          </div>
-          <div className="p-4 rounded-2xl bg-[#151B2C] border border-[#1e2640] flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Critical Cases</p>
-              <p className="text-2xl font-black text-rose-500">{stats.critical}</p>
-            </div>
-            <div className="w-10 h-10 bg-rose-500/10 rounded-xl flex items-center justify-center border border-rose-500/25 animate-pulse">
-              <AlertCircle className="w-5 h-5 text-rose-500" />
-            </div>
-          </div>
-          <div className="p-4 rounded-2xl bg-[#151B2C] border border-[#1e2640] flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Moderate Risk</p>
-              <p className="text-2xl font-black text-amber-500">{stats.warning}</p>
-            </div>
-            <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center border border-amber-500/25">
-              <Activity className="w-5 h-5 text-amber-500" />
-            </div>
-          </div>
-          <div className="p-4 rounded-2xl bg-[#151B2C] border border-[#1e2640] flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Stable Patients</p>
-              <p className="text-2xl font-black text-emerald-500">{stats.stable}</p>
-            </div>
-            <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/25">
-              <ShieldCheck className="w-5 h-5 text-emerald-500" />
-            </div>
-          </div>
-        </div>
-
-        {/* BOTTOM SECTION: 3-COLUMNS GIGANTIC DASHBOARD PANEL */}
+        {/* BODY: 3 columns */}
         <div className="flex-1 flex overflow-hidden">
-          {/* 2. PATIENT QUEUE (COLUMN 1) */}
-          <aside className="w-80 bg-[#111625] border-r border-[#1e2640] flex flex-col shrink-0 select-none">
-            <div className="p-4 border-b border-[#1e2640] space-y-3">
-              <h2 className="text-base font-bold text-white uppercase tracking-wider">Patient Queue ({patients.length})</h2>
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input 
-                  type="text" 
-                  placeholder="Search patient..." 
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-[#151B2C] border border-[#1e2640] rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-accent-maroon focus:ring-1 focus:ring-accent-maroon transition-all"
-                />
+
+          {/* PATIENT LIST */}
+          <div className="w-[280px] shrink-0 bg-[#111827] border-r border-white/[0.06] flex flex-col overflow-hidden">
+            <div className="px-4 pt-4 pb-3 border-b border-white/[0.06] shrink-0">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-black text-white">
+                  Patient List <span className="text-slate-600 font-bold">({patients.length})</span>
+                </h3>
+                <button className="p-1.5 bg-[#1E293B] rounded-lg border border-white/5 hover:bg-white/5 transition-colors">
+                  <Filter className="w-3 h-3 text-slate-400" />
+                </button>
               </div>
-              <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
-                {['all', 'critical', 'warning', 'stable'].map(f => (
-                  <button 
-                    key={f} 
-                    onClick={() => setFilter(f as any)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold capitalize whitespace-nowrap transition-colors ${
-                      filter === f ? 'bg-accent-maroon text-white' : 'bg-[#151B2C] text-slate-400 hover:text-white border border-[#1e2640]'
-                    }`}
-                  >
-                    {f}
-                  </button>
-                ))}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-600" />
+                <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search patients..."
+                  className="w-full pl-8 pr-3 py-2 bg-[#1E293B] border border-white/[0.06] rounded-xl text-[11px] text-white placeholder-slate-600 outline-none focus:border-accent-maroon/40 transition-colors font-medium" />
               </div>
             </div>
-
-            {/* List */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-              {filteredPatients.map(p => {
-                const v = vitalsMap[p.id];
-                const isConn = v && v.heartRate > 0;
-                const isCrit = v?.status === 'critical';
-                const isWarn = v?.status === 'warning';
-                const isSelected = selectedPatientId === p.id;
-                
+            <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-1">
+              {loading ? (
+                Array(6).fill(0).map((_, i) => <div key={i} className="h-[76px] bg-[#1E293B]/40 rounded-2xl animate-pulse" />)
+              ) : filteredPatients.length === 0 ? (
+                <div className="py-16 text-center">
+                  <Users className="w-8 h-8 text-slate-700 mx-auto mb-3" />
+                  <p className="text-[11px] font-bold text-slate-600">No patients found</p>
+                </div>
+              ) : filteredPatients.map(patient => {
+                const v = vitalsMap[patient.id];
+                const pStatus = getPatientStatus(v);
+                const ps = STATUS[pStatus];
+                const isActive = patient.id === selectedId;
+                const pHR = v?.heartRate || v?.bpm;
+                const pO2 = v?.o2;
                 return (
-                  <div 
-                    key={p.id}
-                    onClick={() => setSelectedPatientId(p.id)}
-                    className={`p-3 rounded-xl cursor-pointer border transition-all ${
-                      isSelected 
-                        ? 'bg-[#1c2238] border-accent-maroon shadow-lg shadow-accent-maroon/5' 
-                        : 'bg-[#151B2C]/40 border-[#151B2C] hover:bg-[#151B2C] hover:border-[#1e2640]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="w-9 h-9 rounded-full bg-slate-700 overflow-hidden shrink-0 border border-[#2d3a5f]">
-                        {p.photoURL ? <img src={p.photoURL} alt="" className="w-full h-full object-cover"/> : <User className="w-5 h-5 text-slate-400 m-2"/>}
+                  <motion.button key={patient.id} onClick={() => setSelectedId(patient.id)} whileHover={{ x: 2 }}
+                    className={`w-full text-left p-3 rounded-2xl transition-all border ${isActive
+                      ? 'bg-accent-maroon/15 border-accent-maroon/30'
+                      : 'bg-[#1E293B]/30 border-white/[0.04] hover:bg-[#1E293B]/70 hover:border-white/10'
+                    }`}>
+                    <div className="flex items-center gap-3">
+                      <div className="relative shrink-0">
+                        <div className="w-10 h-10 rounded-xl bg-slate-800 overflow-hidden flex items-center justify-center text-white font-black text-sm border border-white/10">
+                          {patient.photoURL
+                            ? <img src={patient.photoURL} alt="" className="w-full h-full object-cover" />
+                            : (patient.displayName || patient.fullName || 'P').charAt(0).toUpperCase()}
+                        </div>
+                        <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#111827] ${ps.dot}`} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-bold text-xs text-white truncate">{p.displayName || 'Unknown Patient'}</p>
-                        <p className="text-[10px] text-slate-400 font-semibold truncate mt-0.5">ID: {p.id.slice(0,6).toUpperCase()} • {p.age || 45} yrs</p>
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <p className="text-[11px] font-black text-white truncate">{patient.displayName || patient.fullName || 'Patient'}</p>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${ps.badge}`}>{ps.label}</span>
+                        </div>
+                        <p className="text-[9px] text-slate-600 font-bold">HS-{patient.id.slice(-4).toUpperCase()} • {patient.age ? `${patient.age} yrs` : '--'}</p>
+                        <div className="flex items-center gap-3 mt-1">
+                          {pHR && <span className="flex items-center gap-1 text-[9px] font-black text-red-400"><HeartPulse className="w-2.5 h-2.5" />{pHR} BPM</span>}
+                          {pO2 && <span className="flex items-center gap-1 text-[9px] font-black text-blue-400"><Droplets className="w-2.5 h-2.5" />{pO2}%</span>}
+                          {!pHR && !pO2 && <span className="text-[9px] text-slate-700 font-bold">Offline</span>}
+                        </div>
                       </div>
                     </div>
-
-                    <div className="flex justify-between items-center text-[10px]">
-                      <div className="flex items-center gap-3">
-                        <span className={`font-bold flex items-center gap-0.5 ${isCrit ? 'text-rose-500' : isWarn ? 'text-amber-500' : 'text-emerald-500'}`}>
-                          <HeartPulse className="w-3 h-3" /> {isConn ? v.heartRate : '--'} BPM
-                        </span>
-                        <span className="font-bold flex items-center gap-0.5 text-blue-400">
-                          <Droplets className="w-3 h-3" /> {isConn ? `${v.o2}%` : '--'}
-                        </span>
-                      </div>
-                      
-                      <span className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-black text-[9px] uppercase tracking-wider ${
-                        !isConn ? 'bg-[#1a2236] text-slate-500' :
-                        isCrit ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 
-                        isWarn ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      }`}>
-                        <span className={`w-1 h-1 rounded-full ${!isConn ? 'bg-slate-500' : isCrit ? 'bg-rose-500' : isWarn ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
-                        {!isConn ? 'Offline' : isCrit ? 'Critical' : isWarn ? 'Warning' : 'Stable'}
-                      </span>
-                    </div>
-                  </div>
+                  </motion.button>
                 );
               })}
-              {filteredPatients.length === 0 && (
-                <div className="text-center py-8 text-slate-500 text-xs font-semibold">No patients matching filters.</div>
-              )}
             </div>
-          </aside>
+          </div>
 
-          {/* 3. CENTER PANEL & DETAILS (COLUMN 2) */}
-          <main className="flex-1 bg-[#0B0F19] p-6 flex flex-col gap-6 overflow-y-auto min-w-0">
-            {selectedPatient ? (
-              <>
-                {/* Center Panel Content Wrapper */}
-                <div className="grid grid-cols-12 gap-6">
-                  {/* ECG Panel: 8 cols on large screens */}
-                  <div className="col-span-12 xl:col-span-8 flex flex-col gap-6">
-                    {/* ECG GRAPH */}
-                    <div className="bg-[#151B2C] rounded-[24px] border border-[#1e2640] p-6 flex flex-col min-h-[400px]">
-                      <div className="flex justify-between items-center mb-4 select-none">
-                        <div>
-                          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                            Live ECG Monitor <span className="text-slate-500 font-semibold text-xs">| {selectedPatient.displayName}</span>
-                          </h2>
-                          <p className="text-[11px] font-semibold text-slate-400 mt-0.5">
-                            {isSelectedConnected ? 'Continuous realtime clinical waveform streaming' : 'Waiting for connection...'}
-                          </p>
-                        </div>
-                        {isSelectedConnected && (
-                          <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[10px] font-bold flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                            Signal: Excellent
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Canvas area */}
-                      <div className="flex-1 bg-[#121212] rounded-[16px] overflow-hidden border border-[#1e2640] relative min-h-[220px]">
-                        {isSelectedConnected ? (
-                          <ECGGraph bpm={selectedVitals?.heartRate} liveEcg={selectedVitals?.ecg} spo2={selectedVitals?.o2} classification={selectedVitals?.current_condition} />
-                        ) : (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-[#121212] rounded-[16px] space-y-3">
-                            <ActivitySquare className="w-12 h-12 text-slate-600 mb-1" />
-                            <h3 className="text-base font-bold text-slate-400">Waiting for ECG Signal</h3>
-                            <p className="text-slate-500 text-xs max-w-xs mt-1">Patient device is currently offline. Waveform tracking is on standby.</p>
-                            <button
-                              onClick={() => {
-                                if (selectedPatient?.id) {
-                                  startIoTSimulation(selectedPatient.id);
-                                }
-                              }}
-                              className="px-4 py-2 bg-accent-maroon hover:bg-[#630b0d] text-white text-xs font-bold rounded-lg shadow-md transition-all"
-                            >
-                              Simulate Patient Device
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Vitals summary block underneath */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 select-none">
-                      <VitalBox label="Heart Rate" value={isSelectedConnected ? selectedVitals?.heartRate : '--'} unit="BPM" icon={HeartPulse} color="text-rose-500 bg-rose-500/10 border-rose-500/20" />
-                      <VitalBox label="SpO₂" value={isSelectedConnected ? selectedVitals?.o2 : '--'} unit="%" icon={Droplets} color="text-blue-400 bg-blue-500/10 border-blue-500/20" />
-                      <VitalBox label="Temperature" value={isSelectedConnected ? selectedVitals?.temp.toFixed(1) : '--'} unit="°C" icon={Thermometer} color="text-amber-500 bg-amber-500/10 border-amber-500/20" />
-                      <VitalBox label="Blood Pressure" value={isSelectedConnected ? "118/76" : '--'} unit="mmHg" icon={Activity} color="text-purple-400 bg-purple-500/10 border-purple-500/20" />
-                      <VitalBox label="Resp. Rate" value={isSelectedConnected ? "16" : '--'} unit="bpm" icon={ActivitySquare} color="text-teal-400 bg-teal-500/10 border-teal-500/20" />
-                    </div>
-                  </div>
-
-                  {/* AI Clinical Analysis: 4 cols */}
-                  <div className="col-span-12 xl:col-span-4 bg-[#151B2C] rounded-[24px] border border-[#1e2640] p-6 flex flex-col justify-between">
-                    <div>
-                      <h3 className="text-base font-bold text-white flex items-center gap-2 mb-5">
-                        <BrainCircuit className="w-5 h-5 text-accent-maroon" /> AI Clinical Analysis
-                      </h3>
-                      {isSelectedConnected ? (
-                        <div className="space-y-4">
-                          <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-xl">
-                            <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest mb-0.5">Detected Rhythm</p>
-                            <p className="text-sm font-black text-rose-500">Possible Atrial Fibrillation</p>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-3 bg-[#111625] rounded-xl border border-[#1e2640]">
-                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Confidence</p>
-                              <p className="text-lg font-black text-white">97%</p>
-                            </div>
-                            <div className="p-3 bg-[#111625] rounded-xl border border-[#1e2640]">
-                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Risk Level</p>
-                              <p className="text-lg font-black text-rose-500">High</p>
-                            </div>
-                          </div>
-                          
-                          <div>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Reasoning Details</p>
-                            <ul className="list-disc list-inside text-xs text-slate-300 font-semibold space-y-1">
-                              <li>Irregular RR intervals detected.</li>
-                              <li>Absent P waves in Lead II.</li>
-                              <li>Variable ventricular rhythm.</li>
-                            </ul>
-                          </div>
-                          
-                          <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-                            <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Recommendation</p>
-                            <p className="text-xs text-amber-300 font-semibold mt-1">Immediate clinical review recommended. Initiate anticoagulation protocol.</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="py-16 text-center text-slate-500 font-medium text-xs flex flex-col items-center justify-center gap-2">
-                          <BrainCircuit className="w-10 h-10 text-slate-600 mb-2" />
-                          <span>AI analysis requires active telemetry feed.</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-2 mt-6">
-                      <button className="w-full py-3 bg-accent-maroon hover:bg-[#630b0d] text-white font-bold rounded-xl text-xs uppercase transition-colors tracking-wide shadow-lg shadow-accent-maroon/25 flex items-center justify-center gap-1.5">
-                        <Phone className="w-4 h-4" /> Notify Emergency
-                      </button>
-                      <button className="w-full py-3 bg-[#1e2640] hover:bg-[#2c375c] text-white font-semibold rounded-xl text-xs transition-colors">
-                        View Full Report
-                      </button>
-                    </div>
-                  </div>
+          {/* CENTER: ECG + VITALS */}
+          <div className="flex-1 flex flex-col overflow-hidden bg-[#0B1120] min-w-0">
+            {/* ECG Header */}
+            <div className="px-5 pt-4 pb-2 flex items-center justify-between gap-3 shrink-0">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm font-black text-white leading-tight">
+                    {selectedPatient?.displayName || selectedPatient?.fullName || 'No Patient Selected'}
+                    {selectedPatient && (
+                      <span className="text-slate-600 font-bold text-xs ml-2">(HS-{selectedId?.slice(-4).toUpperCase()})</span>
+                    )}
+                  </h2>
+                  {selectedPatient && <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg ${ss.badge}`}>{ss.label}</span>}
                 </div>
-
-                {/* Lower grid: Patient Info & Timeline */}
-                <div className="grid grid-cols-12 gap-6">
-                  {/* Patient Info Panel */}
-                  <div className="col-span-12 lg:col-span-6 bg-[#151B2C] rounded-[24px] border border-[#1e2640] p-6">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Patient Information</h4>
-                    <div className="space-y-3.5 text-xs font-semibold text-slate-300">
-                      <div className="flex justify-between border-b border-[#1e2640] pb-2">
-                        <span className="text-slate-500">Age / Gender</span>
-                        <span className="font-bold text-white">{selectedPatient.age || 45} / {selectedPatient.gender || 'Male'}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#1e2640] pb-2">
-                        <span className="text-slate-500">Blood Group</span>
-                        <span className="font-bold text-white">{selectedPatient.bloodGroup || 'O+'}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#1e2640] pb-2">
-                        <span className="text-slate-500">Contact</span>
-                        <span className="font-bold text-white">{selectedPatient.phone || '+1 (555) 0198'}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#1e2640] pb-2">
-                        <span className="text-slate-500">Emergency Contact</span>
-                        <span className="font-bold text-white">{selectedPatient.emergencyContact || '+1 (555) 0199'}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-[#1e2640] pb-2">
-                        <span className="text-slate-500">Hardware Status</span>
-                        <span className="font-bold text-white">ESP32 HeartSync</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-500">Battery Level</span>
-                        <span className="font-bold text-white flex items-center gap-1">
-                          <Battery className="w-4 h-4 text-emerald-500" /> {isSelectedConnected ? '92%' : '--'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Clinical Timeline Panel */}
-                  <div className="col-span-12 lg:col-span-6 bg-[#151B2C] rounded-[24px] border border-[#1e2640] p-6 flex flex-col justify-between">
-                    <div className="flex justify-between items-center mb-4 select-none">
-                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                        Clinical Timeline
-                      </h3>
-                      <button className="text-[10px] font-bold text-accent-maroon hover:underline uppercase tracking-wide">View All</button>
-                    </div>
-                    
-                    <div className="flex-1 overflow-y-auto max-h-[140px] pr-1 space-y-4">
-                      {selectedAlerts.length > 0 ? selectedAlerts.map((a, i) => (
-                        <div key={i} className="flex gap-3 relative">
-                          <div className="w-0.5 bg-[#2d3a5f] absolute top-5 bottom-[-20px] left-[7px]"></div>
-                          <div className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 z-10 ${a.severity === 'CRITICAL' ? 'bg-rose-500/20' : 'bg-amber-500/20'}`}>
-                            <div className={`w-1.5 h-1.5 rounded-full ${a.severity === 'CRITICAL' ? 'bg-rose-500' : 'bg-amber-500'}`}></div>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-white">{a.type || 'Abnormal Rhythm Detected'}</p>
-                            <p className="text-[9px] font-semibold text-slate-400">{new Date(a.detectedAt).toLocaleTimeString()}</p>
-                          </div>
-                        </div>
-                      )) : (
-                        <div className="text-center text-slate-500 font-semibold py-8 text-xs">No recent events recorded.</div>
-                      )}
-                    </div>
-                  </div>
+                <div className="flex items-center gap-4 mt-1">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-green-400">
+                    <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                    {selectedVitals ? 'Connected' : 'Standby'}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-blue-400">
+                    <Wifi className="w-3 h-3" />Signal: {selectedVitals ? 'Excellent' : 'Waiting'}
+                  </span>
                 </div>
-              </>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-slate-500 font-semibold text-sm">
-                <HeartPulse className="w-12 h-12 text-slate-700 mb-3 animate-pulse" />
-                Select a patient from the queue to start monitoring.
               </div>
-            )}
-          </main>
+              <div className="flex items-center gap-2 shrink-0">
+                {!isSimulating
+                  ? <button onClick={() => setIsSimulating(true)} className="px-3 py-1.5 bg-accent-maroon/20 border border-accent-maroon/30 text-accent-maroon text-[9px] font-black rounded-xl hover:bg-accent-maroon/30 transition-colors">Simulate Device</button>
+                  : <button onClick={() => setIsSimulating(false)} className="px-3 py-1.5 bg-slate-800 border border-white/10 text-slate-400 text-[9px] font-black rounded-xl hover:bg-white/5 transition-colors">Stop Sim</button>
+                }
+                <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors">
+                  <Maximize2 className="w-3.5 h-3.5 text-slate-500" />
+                </button>
+              </div>
+            </div>
+
+            {/* ECG Chart */}
+            <div className="mx-5 relative overflow-hidden rounded-2xl border border-white/[0.06]"
+              style={{ height: 200, backgroundColor: '#050c18' }}>
+              <div className="absolute inset-0" style={{
+                backgroundImage: 'linear-gradient(rgba(239,68,68,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.04) 1px, transparent 1px)',
+                backgroundSize: '25px 25px'
+              }} />
+              <svg className="absolute inset-0 w-full h-full" viewBox="0 0 504 100" preserveAspectRatio="none">
+                {ecgPath
+                  ? <path d={ecgPath} fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                      style={{ filter: 'drop-shadow(0 0 5px rgba(239,68,68,0.7))' }} />
+                  : <line x1="0" y1="50" x2="504" y2="50" stroke="#ef4444" strokeWidth="0.5" strokeDasharray="4,4" opacity="0.3" />
+                }
+              </svg>
+              <div className="absolute top-2 left-4 flex gap-5 text-[8px] font-black text-slate-700 select-none">
+                <span>P</span><span>Q</span><span className="text-red-700">R</span><span>S</span><span>T</span>
+              </div>
+              <div className="absolute top-2 right-3 flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
+                <span className="text-[8px] font-black text-red-400 font-mono">LIVE ECG</span>
+              </div>
+              <div className="absolute bottom-2 left-4 text-[8px] font-black text-slate-700 font-mono">
+                25 mm/s &nbsp;&nbsp; 10 mm/mV &nbsp;&nbsp; 500 Hz
+              </div>
+              <div className="absolute bottom-2 right-3 text-[8px] font-bold text-slate-700">{currentTime.toLocaleTimeString()}</div>
+            </div>
+
+            {/* ECG Controls */}
+            <div className="flex items-center justify-center gap-2 mt-3 shrink-0">
+              <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors"><ZoomOut className="w-3.5 h-3.5 text-slate-500" /></button>
+              <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors"><SkipBack className="w-3.5 h-3.5 text-slate-500" /></button>
+              <button onClick={() => setIsPaused(p => !p)}
+                className="p-3 bg-accent-maroon rounded-xl hover:bg-[#7f1d1d] transition-colors shadow-lg shadow-accent-maroon/20">
+                {isPaused ? <Play className="w-4 h-4 text-white" /> : <Pause className="w-4 h-4 text-white" />}
+              </button>
+              <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors"><SkipForward className="w-3.5 h-3.5 text-slate-500" /></button>
+              <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors"><ZoomIn className="w-3.5 h-3.5 text-slate-500" /></button>
+              <button className="p-2 bg-[#1E293B] rounded-xl border border-white/5 hover:bg-white/5 transition-colors"><Maximize2 className="w-3.5 h-3.5 text-slate-500" /></button>
+            </div>
+
+            {/* Live Vitals */}
+            <div className="mx-5 mt-4 shrink-0">
+              <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest mb-2">Live Vitals</p>
+              <div className="flex gap-2">
+                <VitalBox icon={HeartPulse} value={hr} unit="BPM" label="Heart Rate" color="text-red-400"
+                  sub={hr ? (hr > 100 ? 'Elevated' : 'Normal range') : 'Live Reading'} />
+                <VitalBox icon={Droplets} value={o2} unit="%" label="SpO₂" color="text-blue-400"
+                  sub={o2 ? (o2 < 95 ? 'Below Normal' : 'Oxygen Stable') : 'Oxygen Sat'} />
+                <VitalBox icon={Thermometer} value={temp ? temp.toFixed(1) : null} unit="°C" label="Temperature" color="text-orange-400"
+                  sub={temp ? (temp > 38 ? 'Elevated' : 'Body Normal') : 'Body Temp'} />
+                <VitalBox icon={Activity} value={bpSys && bpDia ? `${bpSys}/${bpDia}` : null} unit="mmHg" label="Blood Pressure" color="text-violet-400"
+                  sub={bpSys ? 'Sys/Dia' : 'Reading...'} />
+                <VitalBox icon={Wind} value={respRate} unit="" label="Resp Rate" color="text-teal-400"
+                  sub={respRate ? 'Breaths/min' : 'Respiratory Rate'} />
+              </div>
+            </div>
+
+            <div className="mx-5 mt-3 flex items-center justify-between text-[8px] font-bold text-slate-700">
+              <span>Last Updated: {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+              <span className="flex items-center gap-1 text-green-700">
+                <div className="w-1 h-1 bg-green-600 rounded-full animate-pulse" />Live Monitoring
+              </span>
+            </div>
+          </div>
+
+          {/* RIGHT PANEL */}
+          <div className="w-[300px] shrink-0 bg-[#111827] border-l border-white/[0.06] overflow-y-auto no-scrollbar">
+            <div className="p-4 space-y-4">
+
+              {/* AI Analysis */}
+              <div className="bg-[#1E293B] rounded-2xl border border-white/[0.06] p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <BrainCircuit className="w-4 h-4 text-accent-maroon" />
+                    <span className="text-[10px] font-black text-white uppercase tracking-wider">AI Analysis</span>
+                  </div>
+                  <span className="text-[8px] font-black px-2 py-1 rounded-lg border"
+                    style={{ backgroundColor: aiAnalysis.riskColor + '20', color: aiAnalysis.riskColor, borderColor: aiAnalysis.riskColor + '30' }}>
+                    {aiAnalysis.risk}
+                  </span>
+                </div>
+
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[8px] font-black text-slate-600 uppercase tracking-wider mb-1">Detected Rhythm</p>
+                    <p className="text-xs font-black leading-tight" style={{ color: aiAnalysis.riskColor }}>{aiAnalysis.rhythm}</p>
+                  </div>
+                  <div className="relative w-14 h-14 shrink-0">
+                    <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                      <circle cx="18" cy="18" r="13" fill="none" stroke="#1a2744" strokeWidth="3.5" />
+                      <circle cx="18" cy="18" r="13" fill="none" stroke={aiAnalysis.riskColor} strokeWidth="3.5"
+                        strokeDasharray={`${(aiAnalysis.confidence / 100) * 81.7} 81.7`} strokeLinecap="round" />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-sm font-black text-white leading-none">{aiAnalysis.confidence || '--'}</span>
+                      <span className="text-[7px] text-slate-500 font-bold">%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-3">
+                  <p className="text-[8px] font-black text-slate-600 uppercase tracking-wider mb-1.5">Reasons</p>
+                  <ul className="space-y-1">
+                    {aiAnalysis.reasons.map((r: string, i: number) => (
+                      <li key={i} className="flex items-start gap-1.5 text-[10px] text-slate-400 font-medium leading-tight">
+                        <div className="w-1 h-1 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: aiAnalysis.riskColor }} />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="mb-4 p-3 bg-[#0B1120] rounded-xl border border-white/5">
+                  <p className="text-[8px] font-black text-slate-600 uppercase tracking-wider mb-1">Recommendation</p>
+                  <p className="text-[10px] text-slate-300 font-medium leading-relaxed">{aiAnalysis.recommendation}</p>
+                </div>
+
+                <div className="space-y-2">
+                  <button onClick={() => setShowEmergencyModal(true)}
+                    className="w-full py-2.5 bg-red-500 hover:bg-red-600 text-white text-[10px] font-black rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-500/20">
+                    <Ambulance className="w-3.5 h-3.5" /> Notify Emergency
+                  </button>
+                  <button onClick={() => navigate('/doctor/alerts')}
+                    className="w-full py-2.5 bg-[#0B1120] border border-white/10 text-slate-300 text-[10px] font-black rounded-xl hover:bg-white/5 transition-colors flex items-center justify-center gap-2">
+                    <FileText className="w-3.5 h-3.5" /> View Full Report
+                  </button>
+                </div>
+              </div>
+
+              {/* Patient Information */}
+              <div className="bg-[#1E293B] rounded-2xl border border-white/[0.06] p-4">
+                <h4 className="text-[10px] font-black text-white uppercase tracking-wider mb-3">Patient Information</h4>
+                {selectedPatient ? (
+                  <div>
+                    <InfoRow label="Age / Gender" value={`${selectedPatient.age || '--'} / ${selectedPatient.gender || '--'}`} />
+                    <InfoRow label="Blood Group" value={selectedPatient.bloodGroup || '--'} />
+                    <InfoRow label="Contact" value={selectedPatient.phone || '+-- --- -------'} />
+                    <InfoRow label="Emergency Contact" value={selectedPatient.emergencyContact || selectedPatient.emergencyPhone || '--'} />
+                    <InfoRow label="Device" value="ESP32 HeartSync" />
+                    <div className="flex items-center justify-between py-1.5 border-b border-white/5">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Battery</p>
+                      <div className="flex items-center gap-2">
+                        <div className="w-14 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-green-500 rounded-full" style={{ width: '92%' }} />
+                        </div>
+                        <span className="text-[10px] font-black text-green-400">92%</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Last Updated</p>
+                      <p className="text-[10px] font-bold text-slate-200">
+                        {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-8 text-center">
+                    <p className="text-[11px] text-slate-600 font-bold">Select a patient to view info</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Clinical Timeline */}
+              <div className="bg-[#1E293B] rounded-2xl border border-white/[0.06] p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-[10px] font-black text-white uppercase tracking-wider">Clinical Timeline</h4>
+                  <button onClick={() => navigate('/doctor/alerts')}
+                    className="text-[9px] font-black text-accent-maroon hover:underline">View All</button>
+                </div>
+                <div className="space-y-3">
+                  {timeline.map((item, i) => (
+                    <div key={i} className="flex items-start gap-3">
+                      <div className="flex flex-col items-center gap-1 shrink-0">
+                        <div className="w-2 h-2 rounded-full mt-0.5" style={{ backgroundColor: item.color }} />
+                        {i < timeline.length - 1 && <div className="w-px h-4 bg-white/[0.06]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-bold text-slate-300 leading-tight">{item.text}</p>
+                        <p className="text-[8px] text-slate-600 font-bold mt-0.5">{item.time}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
         </div>
       </div>
-
-      {/* Emergency Modal Wrapper */}
-      <AnimatePresence>
-        {isModalVisible && (
-           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[9999] flex items-center justify-center p-4 overflow-y-auto">
-             <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} className="w-full max-w-4xl bg-white rounded-[32px] overflow-hidden shadow-2xl relative border-2 border-accent-maroon/20 my-8">
-               <button onClick={handleCloseModalCrossClick} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full z-10"><X className="w-5 h-5 border border-white rounded-full p-0.5" /></button>
-               <div className="bg-accent-maroon text-white p-8 flex items-center gap-6">
-                 <div className="p-4 bg-white/15 rounded-3xl shrink-0 animate-bounce"><AlertCircle className="w-10 h-10 text-white" /></div>
-                 <div>
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/70">MEDICAL ALERT</span>
-                    <h2 className="text-2xl md:text-3xl font-black italic tracking-tight leading-none mt-1">CRITICAL EMERGENCY</h2>
-                 </div>
-               </div>
-               <div className="p-8 space-y-6">
-                  <div className="grid grid-cols-3 gap-4">
-                     <div className={`p-6 rounded-2xl border ${criticalVitals?.isHrCritical ? 'bg-red-50 border-red-200 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
-                        <p className="text-xs font-bold uppercase mb-2">Heart Rate</p>
-                        <p className="text-3xl font-black">{criticalVitals?.heartRate} <span className="text-sm">BPM</span></p>
-                     </div>
-                     <div className={`p-6 rounded-2xl border ${criticalVitals?.isO2Critical ? 'bg-red-50 border-red-200 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
-                        <p className="text-xs font-bold uppercase mb-2">SpO2</p>
-                        <p className="text-3xl font-black">{criticalVitals?.o2} <span className="text-sm">%</span></p>
-                     </div>
-                     <div className={`p-6 rounded-2xl border ${criticalVitals?.isTempCritical ? 'bg-red-50 border-red-200 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
-                        <p className="text-xs font-bold uppercase mb-2">Temp</p>
-                        <p className="text-3xl font-black">{criticalVitals?.temp} <span className="text-sm">°C</span></p>
-                     </div>
-                  </div>
-                  <div className="flex gap-4 mt-8">
-                     <button onClick={handleRejectFalseAlert} className="flex-1 border-2 border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl py-4 font-bold uppercase">Reject False Alert</button>
-                     <button onClick={handleAcceptEmergency} className="flex-1 bg-accent-maroon hover:bg-accent-maroon/90 text-white rounded-xl py-4 font-bold uppercase">Accept Emergency</button>
-                  </div>
-               </div>
-             </motion.div>
-           </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };
-
-const VitalBox = ({ label, value, unit, icon: Icon, color }: { label: string; value: any; unit: string; icon: any; color: string }) => (
-  <div className={`rounded-[20px] p-4 border flex flex-col justify-between ${color}`}>
-    <div className="flex justify-between items-start mb-4">
-      <div className="p-2 rounded-xl bg-white/5"><Icon className="w-5 h-5" /></div>
-    </div>
-    <div>
-      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">{label}</p>
-      <div className="flex items-baseline gap-1">
-        <p className="text-2xl font-black text-white">{value}</p>
-        <span className="text-[10px] font-bold text-slate-400">{unit}</span>
-      </div>
-    </div>
-  </div>
-);
 
 export default DoctorDashboard;
