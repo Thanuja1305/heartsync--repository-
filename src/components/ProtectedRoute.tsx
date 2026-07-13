@@ -38,16 +38,17 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; accessRole?: 'patien
   const isOnboarding = path === '/patient/onboarding' || path === '/doctor/registration' || path === '/doctor-verification-pending' || path === '/pending-approval';
 
   // 2. Prevent cross-access & wrong URL manual entry redirection
+  // But allow onboarding/verification pages
   if (role === 'patient') {
-    if (path.startsWith('/doctor') || path.startsWith('/doctor-') || path === '/admin') {
+    if (!isOnboarding && (path.startsWith('/doctor/dashboard') || path.startsWith('/doctor/patients') || path.startsWith('/doctor/live') || path.startsWith('/doctor/alerts') || path.startsWith('/doctor/emergency') || path.startsWith('/doctor/profile') || path.startsWith('/doctor/patient/') || path === '/admin')) {
       return <Navigate to="/patient/dashboard" replace />;
     }
   } else if (role === 'doctor') {
-    if (path.startsWith('/patient') || path.startsWith('/patient-') || path === '/admin') {
+    if (!isOnboarding && (path.startsWith('/patient/dashboard') || path.startsWith('/patient/profile') || path.startsWith('/patient/ai') || path.startsWith('/patient/live') || path.startsWith('/patient/nearby') || path.startsWith('/patient/consultations') || path.startsWith('/patient/notifications') || path === '/admin')) {
       return <Navigate to="/doctor/dashboard" replace />;
     }
   } else if (role === 'admin') {
-    if (path.startsWith('/patient') || path.startsWith('/doctor')) {
+    if (!isOnboarding && (path.startsWith('/patient/dashboard') || path.startsWith('/doctor/dashboard'))) {
       return <Navigate to="/admin" replace />;
     }
   }

@@ -43,7 +43,7 @@ const DoctorDashboard = () => {
   }, []);
 
   useEffect(() => {
-    if (profile?.role !== 'doctor') {
+    if (profile !== null && profile?.role !== 'doctor') {
       navigate('/');
       return;
     }
