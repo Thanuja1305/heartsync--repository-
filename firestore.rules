@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    function isAuthorizedDoctor() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'doctor';
+    }
+    function isAuthorizedAdmin() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // 3. User Profiles and Roles
+    match /users/{userId} {
+      allow get: if isSignedIn(); // Allow authenticated users to view profiles (needed for dashboard lookups)
+      allow list: if isSignedIn() && (
+        isAuthorizedDoctor() || isAuthorizedAdmin()
+      );
+      
+      allow create: if isOwner(userId) 
+        && isValidUser(incoming())
+        && incoming().uid == request.auth.uid;
+      
+      allow update: if isOwner(userId)
+        && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && (
+          incoming().diff(existing()).affectedKeys().hasAny([
+            'fullName', 'displayName', 'photoURL', 'profileCompleted', 'onboardingCompleted', 'onboarded', 'updatedAt', 
+            'phoneNumber', 'dob', 'gender', 'hospitalName', 'role', 'status',
+            'specialization', 'registrationNumber', 'medicalLicenseId'
+          ])
+        );
+
+      function isValidUser(data) {
+        return (data.uid is string)
+          && (data.email is string)
+          && (!('role' in data) || data.role == null || data.role in ['patient', 'doctor', 'admin'])
+          && (!('status' in data) || data.status == null || data.status is string)
+          && (!('fullName' in data) || data.fullName == null || (data.fullName is string && data.fullName.size() <= 150))
+          && (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 150));
+      }
+    }
+
+    // 4. Patient Collections
+    match /patients/{userId} {
+      allow get: if isOwner(userId) || isAuthorizedDoctor();
+      allow list: if isAuthorizedDoctor() || isAuthorizedAdmin();
+      
+      allow create: if isOwner(userId) && incoming().uid == request.auth.uid;
+      allow update: if isOwner(userId) && incoming().uid == existing().uid;
+    }
+
+    // 5. Doctor Collections
+    match /doctors/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create: if isOwner(userId) && incoming().uid == request.auth.uid;
+      allow update: if isOwner(userId) && incoming().uid == existing().uid;
+    }
+
+    // 6. Emergency Alerts
+    match /emergencyAlerts/{alertId} {
+      allow get: if isSignedIn() && (isOwner(existing().patientId) || isAuthorizedDoctor());
+      allow list: if isAuthorizedDoctor() || isAuthorizedAdmin();
+      
+      allow create: if isSignedIn() && incoming().patientId == request.auth.uid;
+      allow update: if isAuthorizedDoctor() 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'verifiedBy', 'verifiedAt']);
+    }
+
+    // 7. Live Metrics
+    match /liveHealthMetrics/{patientId} {
+      allow read: if isOwner(patientId) || isAuthorizedDoctor();
+      allow write: if isOwner(patientId);
+    }
+    
+    // 8. Consultations/Assessments
+    match /patientAssessments/{assessmentId} {
+      allow get: if isSignedIn() && (isOwner(existing().userId) || isAuthorizedDoctor());
+      allow list: if isOwner(request.auth.uid) || isAuthorizedDoctor();
+      allow create: if isOwner(incoming().userId);
+    }
+  }
+}

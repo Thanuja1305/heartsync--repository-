@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  
+  --color-primary: #FFFFFF;
+  --color-secondary: #F8FAFC;
+  --color-accent-maroon: #7B1113;
+  --color-accent-maroon-light: #FFF1F1;
+  --color-medical-red: #D32F2F;
+  --color-dark-navy: #0F172A;
+  --color-muted: #64748B;
+  --color-border-subtle: rgba(128, 0, 0, 0.08);
+}
+
+@layer base {
+  * {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-primary text-dark-navy font-sans selection:bg-accent-maroon/10 selection:text-accent-maroon;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-sm;
+  }
+  
+  .glass-dark {
+    @apply bg-dark-navy/5 backdrop-blur-xl border border-dark-navy/10;
+  }
+
+  .premium-shadow {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.01);
+  }
+
+  .premium-shadow-hover {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.02);
+  }
+
+  .glow-maroon-subtle {
+    box-shadow: 0 0 15px rgba(128, 0, 0, 0.05);
+  }
+
+  .glow-maroon-hover {
+    box-shadow: 0 0 30px rgba(128, 0, 0, 0.12);
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "Base user profile information sharing fields between roles.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["patient", "doctor"] },
+        "phoneNumber": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "profileCompleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "dob": { "type": "string" },
+        "gender": { "type": "string" },
+        "hospitalName": { "type": "string" },
+        "specialization": { "type": "string" },
+        "registrationNumber": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "patients": {
+      "title": "Patient Details",
+      "description": "Specific information for patient users including live surveillance data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "dob": { "type": "string" },
+        "gender": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "liveHealthMetrics": {
+      "title": "Live Health Metrics",
+      "description": "Real-time telemetry from IoT sensors pushed via WSS bridge.",
+      "type": "object",
+      "properties": {
+        "heartRate": { "type": "number" },
+        "bpSys": { "type": "number" },
+        "bpDia": { "type": "number" },
+        "o2": { "type": "number" },
+        "temp": { "type": "number" },
+        "riskLevel": { "type": "string" },
+        "isEmergency": { "type": "boolean" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "doctors": {
+      "title": "Doctor Details",
+      "description": "Specific information for doctor users.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "hospitalName": { "type": "string" },
+        "specialization": { "type": "string" },
+        "registrationNumber": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "patientAssessments": {
+      "title": "Patient Health Assessment",
+      "description": "AI-driven health questionnaire answers.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "questions": { "type": "array" },
+        "answers": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "questions", "answers"]
+    },
+    "doctors": {
+      "title": "Doctors",
+      "description": "Medical professionals registered in the system.",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "specialization": { "type": "string" },
+        "experience": { "type": "string" },
+        "hospitalSlug": { "type": "string" },
+        "consultationFee": { "type": "string" },
+        "rating": { "type": "number" },
+        "availability": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "emergencySupport": { "type": "boolean" },
+        "location": { "type": "object" }
+      },
+      "required": ["fullName", "specialization"]
+    },
+    "hospitals": {
+      "title": "Hospitals",
+      "description": "Healthcare facilities registered in the system.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "emergencyStatus": { "type": "string" },
+        "bedsAvailable": { "type": "number" },
+        "icuAvailable": { "type": "number" },
+        "contactNumber": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "location": { "type": "object" },
+        "departments": { "type": "array" }
+      },
+      "required": ["name"]
+    },
+    "appointments": {
+      "title": "Appointments",
+      "description": "Consultation bookings.",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "hospitalId": { "type": "string" },
+        "symptoms": { "type": "string" },
+        "appointmentTime": { "type": "string" },
+        "emergencyLevel": { "type": "string" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["patientId", "doctorId", "appointmentTime"]
+    },
+    "patientSearchHistory": {
+      "title": "Search History",
+      "description": "Log of patient searches for analytics and recommendations.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "query": { "type": "string" },
+        "filters": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "emergencyAlerts": {
+      "title": "Emergency Alerts",
+      "description": "Active and past emergency triggers for patients.",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "emergency": { "type": "boolean" },
+        "severity": { "type": "string", "enum": ["CRITICAL", "HIGH", "MODERATE"] },
+        "detectedAt": { "type": "number" },
+        "aiSummary": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING_DOCTOR_VERIFICATION", "CRITICAL_CONFIRMED", "SAFE_CONFIRMED", "AMBULANCE_DISPATCHED", "RESOLVED"] },
+        "patientName": { "type": "string" },
+        "vitalsAtTrigger": { "type": "object" },
+        "verifiedBy": { "type": "string" },
+        "verifiedAt": { "type": "number" }
+      },
+      "required": ["patientId", "emergency", "severity", "detectedAt", "status"]
+    },
+    "ambulanceDispatch": {
+      "title": "Ambulance Dispatch",
+      "description": "Details of dispatched ambulances for emergency cases.",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "alertId": { "type": "string" },
+        "ambulanceAssigned": { "type": "boolean" },
+        "ambulanceId": { "type": "string" },
+        "eta": { "type": "string" },
+        "status": { "type": "string", "enum": ["REQUESTED", "ON_THE_WAY", "ARRIVED", "TRANSPORTING", "COMPLETED"] },
+        "hospitalAssigned": { "type": "string" },
+        "dispatchedAt": { "type": "number" }
+      },
+      "required": ["patientId", "alertId", "ambulanceId", "status"]
+    },
+    "gpsTracking": {
+      "title": "GPS Tracking",
+      "description": "Real-time geolocation stream for active patients.",
+      "type": "object",
+      "properties": {
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "emergencyActive": { "type": "boolean" },
+        "heading": { "type": "number" },
+        "speed": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "users",
+      "description": "User account documents"
+    },
+    "patients/{userId}": {
+      "schema": "users",
+      "description": "Detailed patient data linked by userId"
+    },
+    "liveHealthMetrics/{patientId}": {
+      "schema": "liveHealthMetrics",
+      "description": "Real-time vitals for patients"
+    },
+    "doctors/{userId}": {
+      "schema": "users",
+      "description": "Detailed doctor data linked by userId"
+    },
+    "patientAssessments/{assessmentId}": {
+      "schema": "patientAssessments",
+      "description": "Collection of patient health assessments"
+    },
+    "emergencyAlerts/{alertId}": {
+      "schema": "emergencyAlerts",
+      "description": "Active cardiac emergency alerts"
+    },
+    "ambulanceDispatch/{dispatchId}": {
+      "schema": "ambulanceDispatch",
+      "description": "Ambulance assignment and tracking data"
+    },
+    "auditLogs/{logId}": {
+      "schema": "patientSearchHistory",
+      "description": "Doctor actions and system events trail"
+    },
+    "aiAnalysis/{patientId}": {
+      "schema": "patientAssessments",
+      "description": "Real-time AI diagnostic reasoning"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Remix: CardioAlert AI + IoT",
+  "description": "Real-time AI + IoT Heart Attack Detection and Emergency Response Platform with dual Patient/Doctor dashboards and healthcare-grade telemetry.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
