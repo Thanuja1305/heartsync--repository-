@@ -317,7 +317,7 @@ const Signup = () => {
 
             <p className="text-sm font-bold text-slate-400">
                Already connected to the node? <br />
-               <Link to="/select-role" className="text-accent-maroon hover:underline font-black uppercase tracking-widest text-xs mt-2 inline-block">Secure Login</Link>
+               <Link to="/auth" className="text-accent-maroon hover:underline font-black uppercase tracking-widest text-xs mt-2 inline-block">Secure Login</Link>
             </p>
           </div>
         </div>

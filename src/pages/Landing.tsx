@@ -36,8 +36,8 @@ const Landing = () => {
   useEffect(() => {
     if (user && profile?.role) {
       if (profile.role === 'admin') navigate('/admin');
-      else if (profile.role === 'patient') navigate('/patient/dashboard');
-      else if (profile.role === 'doctor') navigate('/doctor/dashboard');
+      else if (profile.role === 'patient') navigate('/patient-dashboard');
+      else if (profile.role === 'doctor') navigate('/doctor-dashboard');
     }
   }, [user, profile, navigate]);
 
@@ -267,13 +267,13 @@ const Landing = () => {
             className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 w-full sm:w-auto"
           >
             <Link 
-              to="/select-role" 
+              to="/auth" 
               className="w-full sm:w-auto group px-8 py-4.5 bg-accent-maroon text-white text-[10px] md:text-[11px] font-black uppercase tracking-[0.25em] rounded-2xl shadow-xl shadow-accent-maroon/20 hover:bg-dark-navy hover:-translate-y-1 transition-all duration-300 flex items-center justify-center gap-3"
             >
               Get Started <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform duration-300" />
             </Link>
             <Link 
-              to="/select-role" 
+              to="/auth" 
               className="w-full sm:w-auto px-8 py-4.5 bg-white/60 backdrop-blur-md border border-dark-navy/10 text-dark-navy text-[10px] md:text-[11px] font-black uppercase tracking-[0.25em] rounded-2xl hover:bg-white hover:shadow-lg transition-all duration-300 text-center"
             >
               Watch Demo
@@ -664,7 +664,7 @@ const Landing = () => {
           </p>
 
           <Link 
-            to="/select-role" 
+            to="/auth" 
             className="inline-flex group px-10 py-5 bg-accent-maroon text-white text-[11px] font-black uppercase tracking-[0.25em] rounded-2xl hover:bg-white hover:text-dark-navy hover:shadow-2xl transition-all duration-300 items-center justify-center gap-3"
           >
             Establish Connection <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform duration-300" />

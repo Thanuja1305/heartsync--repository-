@@ -15,9 +15,14 @@ const RoleSelection = () => {
       if (profile.role === 'admin') {
         navigate('/admin');
       } else if (profile.role === 'patient') {
-        navigate('/patient/dashboard');
+        navigate('/patient-dashboard');
       } else if (profile.role === 'doctor') {
-        navigate('/doctor/dashboard');
+        const status = (profile as any).roleProfile?.verification_status || 'pending';
+        if (status === 'approved') {
+          navigate('/doctor-dashboard');
+        } else {
+          navigate('/doctor-verification-pending');
+        }
       } else {
         navigate('/');
       }
@@ -36,16 +41,16 @@ const RoleSelection = () => {
         showToast(`${role} profile initialized`, 'success');
         
         if (role === 'patient') {
-          navigate('/patient/onboarding');
+          navigate('/patient-dashboard');
         } else if (role === 'doctor') {
-          navigate('/doctor/registration');
+          navigate('/doctor-verification-pending');
         } else {
           navigate('/admin');
         }
       } catch (error) {
         console.error("Error setting role:", error);
         showToast("Failed to set role. Please try logging in again.", "error");
-        navigate(role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient/login' : '/doctor/login');
+        navigate(role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient-login' : '/doctor-login');
       } finally {
         setLoading(false);
       }
@@ -54,7 +59,7 @@ const RoleSelection = () => {
 
     showToast(`Accessing ${role} portal...`, 'success');
     
-    const targetPath = role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient/login' : '/doctor/login';
+    const targetPath = role === 'admin' ? '/admin/login' : role === 'patient' ? '/patient-login' : '/doctor-login';
     
     setTimeout(() => {
       navigate(targetPath);

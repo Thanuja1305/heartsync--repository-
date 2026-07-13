@@ -58,7 +58,7 @@ const PatientSignup = () => {
         allergies,
         familyHistory
       });
-      navigate('/patient/dashboard');
+      navigate('/patient-dashboard');
     } catch (err: any) {
       setError(err.message || 'Signup registration rejected.');
     } finally {
