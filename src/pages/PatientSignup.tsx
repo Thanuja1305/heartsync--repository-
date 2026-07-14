@@ -186,7 +186,9 @@ const PatientSignup = () => {
                     type="button"
                     onClick={() => setStep(2)}
                     className="w-full py-5 bg-accent-maroon text-white font-black rounded-[24px] hover:scale-[1.01] transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-xs mt-6"
-                  >\n                    Next: Biographic Data <ArrowRight className="w-4 h-4" />\n                  </button>
+                  >
+                    Next: Biographic Data <ArrowRight className="w-4 h-4" />
+                  </button>
                 </motion.div>
               )}
 
@@ -265,7 +267,9 @@ const PatientSignup = () => {
                       type="button"
                       onClick={() => setStep(3)}
                       className="flex-[2] py-5 bg-accent-maroon text-white font-black rounded-[24px] hover:scale-[1.01] transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-xs"
-                    >\n                      Next: Medical Parameters <ArrowRight className="w-4 h-4" />\n                    </button>
+                    >
+                      Next: Medical Parameters <ArrowRight className="w-4 h-4" />
+                    </button>
                   </div>
                 </motion.div>
               )}

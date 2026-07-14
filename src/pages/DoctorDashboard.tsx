@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, onSnapshot, limit, orderBy, addDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, limit, orderBy, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { db, rtdb } from '../lib/firebase';
 import { ref, onValue } from 'firebase/database';
 import { validateSensorPacket } from '../lib/dataValidator';
@@ -167,6 +167,7 @@ const DoctorDashboard = () => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [notifCount, setNotifCount] = useState(0);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+  const [activeEmergencyAlert, setActiveEmergencyAlert] = useState<any | null>(null);
 
   useEffect(() => { const t = setInterval(() => setCurrentTime(new Date()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { if (profile !== null && profile?.role !== 'doctor') navigate('/'); }, [profile, navigate]);
@@ -209,6 +210,8 @@ const DoctorDashboard = () => {
       const a = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setAlerts(a);
       setNotifCount(a.filter((al: any) => !al.acknowledged).length);
+      const activeEmergency = a.find((al: any) => al.status !== 'RESOLVED' && !al.acknowledged && al.emergency);
+      setActiveEmergencyAlert(activeEmergency || null);
     });
     return () => { unsubP(); unsubV(); unsubA(); unsubR(); };
   }, [user?.uid]);
@@ -279,8 +282,70 @@ const DoctorDashboard = () => {
     } catch (e) { console.error(e); }
   }, [selectedPatient, selectedId, user]);
 
+  const handleAcknowledgeAlert = useCallback(async (alertId: string) => {
+    try {
+      await updateDoc(doc(db, 'emergencyAlerts', alertId), {
+        acknowledged: true,
+        status: 'RESOLVED',
+        verifiedAt: new Date().toISOString(),
+        verifiedBy: user?.uid
+      });
+      setActiveEmergencyAlert(null);
+    } catch (e) { console.error(e); }
+  }, [user]);
+
   return (
     <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
+      {/* Real-time Emergency Alert Banner */}
+      <AnimatePresence>
+        {activeEmergencyAlert && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] max-w-2xl w-full px-4"
+          >
+            <div className="bg-[#1e1b1b] border-2 border-red-500 rounded-3xl p-5 shadow-2xl shadow-red-500/10 flex flex-col md:flex-row items-center gap-4 relative overflow-hidden animate-pulse">
+              <div className="w-12 h-12 bg-red-500/20 rounded-2xl flex items-center justify-center shrink-0 border border-red-500/40 relative">
+                <AlertCircle className="w-6 h-6 text-red-500 animate-bounce" />
+                <span className="absolute inset-0 border border-red-500 rounded-2xl animate-ping opacity-75" />
+              </div>
+              
+              <div className="flex-1 min-w-0 text-center md:text-left">
+                <div className="flex items-center gap-2 justify-center md:justify-start">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-red-500 bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">Critical Patient Alert</span>
+                  <span className="text-[10px] text-slate-500 font-bold">{new Date(activeEmergencyAlert.detectedAt).toLocaleTimeString()}</span>
+                </div>
+                <h4 className="text-sm font-black text-white mt-1">
+                  Patient {patients.find(p => p.id === activeEmergencyAlert.patientId)?.displayName || patients.find(p => p.id === activeEmergencyAlert.patientId)?.fullName || activeEmergencyAlert.patientName} is in Danger!
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  <span className="font-bold text-slate-200">AI Summary Rhythm Report:</span> Possible Atrial Fibrillation / High Risk Cardiac Event detected. Vitals at trigger: <span className="font-black text-red-400">{activeEmergencyAlert.vitalsAtTrigger?.heartRate || '--'} BPM</span>, <span className="font-black text-blue-400">{activeEmergencyAlert.vitalsAtTrigger?.spo2 || '--'}% SpO₂</span>. Immediate clinical review required!
+                </p>
+              </div>
+
+              <div className="flex flex-row md:flex-col gap-2 shrink-0 w-full md:w-auto">
+                <button 
+                  onClick={() => {
+                    setSelectedId(activeEmergencyAlert.patientId);
+                    setShowEmergencyModal(true);
+                  }}
+                  className="flex-1 md:w-32 py-2 bg-red-500 hover:bg-red-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-red-500/20"
+                >
+                  Triage Unit
+                </button>
+                <button 
+                  onClick={() => handleAcknowledgeAlert(activeEmergencyAlert.id)}
+                  className="flex-1 md:w-32 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-white/5"
+                >
+                  Acknowledge
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Mobile overlay */}
       <AnimatePresence>
         {isSidebarOpen && (

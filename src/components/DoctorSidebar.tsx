@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  HeartPulse, Users, Activity, Bell, FileText,
-  MessageSquare, Settings, LogOut, X
+  HeartPulse, Users, Activity, Bell,
+  Settings, LogOut, X, Ambulance
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -18,8 +18,7 @@ const navItems = [
   { id: 'patients',         label: 'Patients',         icon: Users,         path: '/doctor/patients' },
   { id: 'live-monitoring',  label: 'Live Monitoring',  icon: Activity,      path: '/doctor/live-monitoring' },
   { id: 'alerts',           label: 'Alerts',           icon: Bell,          path: '/doctor/alerts' },
-  { id: 'reports',          label: 'Reports',          icon: FileText,      path: '/doctor/alerts' },
-  { id: 'messages',         label: 'Messages',         icon: MessageSquare, path: '/doctor/dashboard' },
+  { id: 'emergency',        label: 'Emergency',        icon: Ambulance,     path: '/doctor/emergency' },
   { id: 'settings',         label: 'Settings',         icon: Settings,      path: '/doctor/profile' },
 ];
 

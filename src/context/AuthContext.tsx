@@ -132,7 +132,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       localStorage.removeItem('last_known_profile');
+      localStorage.removeItem('demo_mode');
       setProfile(null);
+      setUser(null);
     } catch (error) {
       console.error("Error during logout cleanup:", error);
     }
@@ -233,147 +235,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (error) throw error;
       result = data;
     } catch (error: any) {
-      // If it fails and it's a demo account, let's auto-create it!
-      if (isDoctorDemo && (password === 'Doctor@123' || password === 'doctor123')) {
-        console.info("[DEMO SEEDING] Initializing Doctor Demo Account...");
-        const doctorName = normalizedEmail === 'doctor@heartsync.com' ? 'Dr. Demo Heart Specialist' : 'Dr. Alexander Heartwise';
+      // === DEMO OFFLINE MODE ===
+      // When Supabase can't authenticate demo accounts (not created yet, or wrong password),
+      // we fall back to a local demo profile stored in localStorage.
+      if (isPatientDemo && (password === 'Patient@123' || password === 'patient123')) {
+        console.info("[DEMO MODE] Activating offline patient demo session...");
+        const demoPatientProfile: UserProfile = {
+          id: 'demo-patient-001',
+          uid: 'demo-patient-001',
+          email: 'patient@heartsync.com',
+          full_name: 'Sarah Jenkins',
+          displayName: 'Sarah Jenkins',
+          fullName: 'Sarah Jenkins',
+          role: 'patient',
+          status: 'approved',
+          onboarded: true,
+          onboardingCompleted: true,
+          photoURL: null,
+          gender: 'Female',
+          phoneNumber: '+1 (555) 048-1920'
+        };
+        // Store demo profile in localStorage so AuthContext picks it up
         try {
-          await signupDoctor(normalizedEmail, supabasePassword, {
-            fullName: doctorName,
-            phone: '+1 (555) 019-2834',
-            age: 45,
-            medicalLicenseId: 'LIC-99281-MD',
-            medicalCollege: 'Johns Hopkins School of Medicine',
-            experienceYears: 18,
-            hospitalName: 'Metropolitan Cardiac Institute',
-            specialization: 'Advanced Electrophysiology'
-          });
-          
-          // Force approve doctor profile in database
-          const { data: authUser, error: authErr } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
-          if (authErr) throw authErr;
-          
-          if (authUser.user) {
-            await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', authUser.user.id);
-            await supabase.from('doctor_profiles').update({ verification_status: 'approved' }).eq('user_id', authUser.user.id);
-            
-            // Also seed to Firestore users collection
-            await setDoc(doc(db, 'users', authUser.user.id), {
-              uid: authUser.user.id,
-              email: normalizedEmail,
-              displayName: doctorName,
-              fullName: doctorName,
-              role: 'doctor',
-              status: 'approved',
-              onboarded: true,
-              onboardingCompleted: true,
-              specialization: 'Advanced Electrophysiology',
-              hospitalName: 'Metropolitan Cardiac Institute',
-              experience: '18 Years',
-              phoneNumber: '+1 (555) 019-2834'
-            }, { merge: true });
-          }
-          
-          // Sign in again
-          const retry = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
-          if (retry.error) throw retry.error;
-          result = retry.data;
-        } catch (seedErr: any) {
-          console.error("[DEMO SEEDING ERROR]:", seedErr);
-          throw new Error("Failed to auto-seed Doctor Demo account: " + seedErr.message);
-        }
-      } else if (isPatientDemo && (password === 'Patient@123' || password === 'patient123')) {
-        console.info("[DEMO SEEDING] Initializing Patient Demo Account...");
+          localStorage.setItem('last_known_profile', JSON.stringify(demoPatientProfile));
+          localStorage.setItem('demo_mode', 'patient');
+        } catch (e) {}
+        setProfile(demoPatientProfile);
+        setUser({ id: 'demo-patient-001', uid: 'demo-patient-001', email: 'patient@heartsync.com' });
+        setLoading(false);
+        showToast("Demo Patient Session Active", "success");
+        return;
+      } else if (isDoctorDemo && (password === 'Doctor@123' || password === 'doctor123')) {
+        console.info("[DEMO MODE] Activating offline doctor demo session...");
+        const demoDoctorProfile: UserProfile = {
+          id: 'demo-doctor-001',
+          uid: 'demo-doctor-001',
+          email: 'doctor@heartsync.com',
+          full_name: 'Dr. Demo Heart Specialist',
+          displayName: 'Dr. Demo Heart Specialist',
+          fullName: 'Dr. Demo Heart Specialist',
+          role: 'doctor',
+          status: 'approved',
+          onboarded: true,
+          onboardingCompleted: true,
+          photoURL: null,
+          specialization: 'Advanced Electrophysiology',
+          hospitalName: 'Metropolitan Cardiac Institute',
+          experience: '18 Years',
+          roleProfile: { verification_status: 'approved' }
+        };
         try {
-          // Pre-fetch or pre-provision the doctor to establish relationship
-          let doctorUid = '';
-          const { data: docProf } = await supabase.from('profiles').select('id').eq('email', 'doctor@heartsync.com').maybeSingle();
-          if (docProf) {
-            doctorUid = docProf.id;
-          } else {
-            console.info("[DEMO SEEDING] Pre-provisioning Doctor Demo for Patient connection...");
-            try {
-              await signupDoctor('doctor@heartsync.com', 'Doctor@123!', {
-                fullName: 'Dr. Demo Heart Specialist',
-                phone: '+1 (555) 019-2834',
-                age: 45,
-                medicalLicenseId: 'LIC-99281-MD',
-                medicalCollege: 'Johns Hopkins School of Medicine',
-                experienceYears: 18,
-                hospitalName: 'Metropolitan Cardiac Institute',
-                specialization: 'Advanced Electrophysiology'
-              });
-              const { data: dAuth } = await supabase.auth.signInWithPassword({ email: 'doctor@heartsync.com', password: 'Doctor@123!' });
-              if (dAuth.user) {
-                doctorUid = dAuth.user.id;
-                await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', doctorUid);
-                await supabase.from('doctor_profiles').update({ verification_status: 'approved' }).eq('user_id', doctorUid);
-                await setDoc(doc(db, 'users', doctorUid), {
-                  uid: doctorUid,
-                  email: 'doctor@heartsync.com',
-                  displayName: 'Dr. Demo Heart Specialist',
-                  fullName: 'Dr. Demo Heart Specialist',
-                  role: 'doctor',
-                  status: 'approved',
-                  onboarded: true,
-                  onboardingCompleted: true,
-                  specialization: 'Advanced Electrophysiology',
-                  hospitalName: 'Metropolitan Cardiac Institute',
-                  phoneNumber: '+1 (555) 019-2834'
-                }, { merge: true });
-              }
-            } catch (preErr) {
-              console.error("Failed to pre-provision doctor:", preErr);
-            }
-          }
-
-          await signupPatient(normalizedEmail, supabasePassword, {
-            fullName: 'Sarah Jenkins',
-            phone: '+1 (555) 048-1920',
-            age: 38,
-            gender: 'Female',
-            bloodGroup: 'O-Positive',
-            emergencyContactName: 'Robert Jenkins (Spouse)',
-            emergencyContactNumber: '+1 (555) 048-1921',
-            medicalConditions: 'Chronic hypertension, minor mitral valve prolapse',
-            medications: 'Lisinopril 10mg daily',
-            allergies: 'Penicillin',
-            familyHistory: 'Maternal grandfather had coronary artery disease'
-          });
-          
-          // Force approve patient profile in database
-          const { data: authUser, error: authErr } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
-          if (authErr) throw authErr;
-          
-          if (authUser.user) {
-            await supabase.from('profiles').update({ status: 'approved', onboarded: true, onboardingCompleted: true }).eq('id', authUser.user.id);
-            
-            // Seed demo metrics & history
-            await seedDemoPatientData(authUser.user.id, doctorUid);
-
-            // Establish relationship in Supabase SQL doctor_patients table
-            if (doctorUid) {
-              const { data: pRec } = await supabase.from('patients').select('id').eq('user_id', authUser.user.id).maybeSingle();
-              const { data: dRec } = await supabase.from('doctors').select('id').eq('user_id', doctorUid).maybeSingle();
-              if (pRec && dRec) {
-                await supabase.from('doctor_patients').insert({
-                  doctor_id: dRec.id,
-                  patient_id: pRec.id,
-                  status: 'active'
-                });
-                console.log("Seeded database link in doctor_patients successfully!");
-              }
-            }
-          }
-          
-          // Sign in again
-          const retry = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: supabasePassword });
-          if (retry.error) throw retry.error;
-          result = retry.data;
-        } catch (seedErr: any) {
-          console.error("[DEMO SEEDING ERROR]:", seedErr);
-          throw new Error("Failed to auto-seed Patient Demo account: " + seedErr.message);
-        }
+          localStorage.setItem('last_known_profile', JSON.stringify(demoDoctorProfile));
+          localStorage.setItem('demo_mode', 'doctor');
+        } catch (e) {}
+        setProfile(demoDoctorProfile);
+        setUser({ id: 'demo-doctor-001', uid: 'demo-doctor-001', email: 'doctor@heartsync.com' });
+        setLoading(false);
+        showToast("Demo Doctor Session Active", "success");
+        return;
       } else {
         console.error("Login Error:", error);
         throw new Error(error.message || String(error));
@@ -662,6 +581,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const currentUser = session?.user ? { ...session.user, uid: session.user.id } : null;
+      
+      // Don't overwrite demo session with null when Supabase has no session
+      const demoModeActive = localStorage.getItem('demo_mode');
+      if (!currentUser && demoModeActive) {
+        setLoading(false);
+        return; // Preserve demo session
+      }
+      
       setUser(currentUser);
       
       if (loadingTimer) {
@@ -797,9 +724,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setLoading(false);
 
       } else {
-        setProfile(null);
-        localStorage.removeItem('last_known_profile');
-        setLoading(false);
+        // Check if we're in offline demo mode before clearing the profile
+        const demoMode = localStorage.getItem('demo_mode');
+        if (demoMode) {
+          // Don't clear demo profile - user is in local demo mode
+          setLoading(false);
+        } else {
+          setProfile(null);
+          localStorage.removeItem('last_known_profile');
+          setLoading(false);
+        }
       }
     });
 

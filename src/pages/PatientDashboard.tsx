@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Heart, Bell, Settings, Activity, Thermometer, Droplets,
+  Heart, Bell, Activity, Thermometer, Droplets,
   HeartPulse, User, Clock, Calendar, BrainCircuit, ArrowRight,
   ActivitySquare, TrendingUp, FileText, LogOut, Wifi, WifiOff,
-  ChevronDown, Menu, X, Stethoscope, MapPin, MessageSquare
+  Menu, Stethoscope, MapPin, MessageSquare
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -14,18 +14,7 @@ import { ref, onValue } from 'firebase/database';
 import ECGGraph from '../components/patient/ECGGraph';
 import { usePatientVitals } from '../hooks/usePatientVitals';
 import { startIoTSimulation } from '../services/iotService';
-
-// ─── Sidebar nav items — matches reference image exactly ────────────────
-const NAV_ITEMS = [
-  { name: 'Dashboard',   icon: HeartPulse,      path: '/patient/dashboard' },
-  { name: 'Live ECG',    icon: Activity,        path: '/patient/dashboard' },
-  { name: 'AI Analysis', icon: BrainCircuit,    path: '/patient/ai-assessment' },
-  { name: 'Vitals',      icon: ActivitySquare,  path: '/patient/profile' },
-  { name: 'Reports',     icon: FileText,        path: '/patient/consultations' },
-  { name: 'Alerts',      icon: Bell,            path: '/patient/notifications' },
-  { name: 'Device',      icon: Wifi,            path: '/patient/dashboard' },
-  { name: 'Settings',    icon: Settings,        path: '/patient/profile' },
-];
+import PatientSidebar from '../components/PatientSidebar';
 
 // ─── Time-based greeting ─────────────────────────────────────────────────
 const getGreeting = () => {
@@ -49,7 +38,6 @@ const PatientDashboard = () => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState('Dashboard');
 
   // Clock
   useEffect(() => {
@@ -78,11 +66,15 @@ const PatientDashboard = () => {
     const unsubPatient = onSnapshot(doc(db, 'patients', userId), snap => {
       if (snap.exists()) setPatientData((p: any) => ({ ...p, ...snap.data() }));
     });
+    // Also listen to 'users' collection (used by login sync to store full name)
+    const unsubUser = onSnapshot(doc(db, 'users', userId), snap => {
+      if (snap.exists()) setPatientData((p: any) => ({ ...p, ...snap.data() }));
+    });
     const q = query(collection(db, 'patientHistory', userId, 'logs'), orderBy('timestamp', 'desc'), limit(5));
     const unsubHistory = onSnapshot(q, snap => {
       setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    return () => { unsubPatient(); unsubHistory(); };
+    return () => { unsubPatient(); unsubUser(); unsubHistory(); };
   }, [userId]);
 
   // RTDB → vitals state
@@ -108,8 +100,15 @@ const PatientDashboard = () => {
 
   const isConnected = !!(vitals && vitals.heartRate > 0 && !vitalsError);
 
-  const rawName = patientData?.fullName || profile?.displayName || profile?.full_name || 'Patient';
-  const cleanName = rawName.replace(/^(dr\.?\s+)/i, '');
+  // Get patient name: prioritize Firestore data (most accurate), then profile, then email-based fallback
+  const rawName = patientData?.fullName 
+    || patientData?.displayName 
+    || profile?.full_name 
+    || profile?.displayName 
+    || user?.email?.split('@')[0] 
+    || 'Patient';
+  // Strip any Dr. prefix (shouldn't appear for patients but just in case)
+  const cleanName = rawName.replace(/^(dr\.?\s+|doctor\s+)/i, '').trim();
   const patientFirstName = cleanName.split(' ')[0] || 'Patient';
   const patientFullName = cleanName;
   const patientId = userId ? `HS-${userId.slice(-4).toUpperCase()}` : 'HS-XXXX';
@@ -136,70 +135,12 @@ const PatientDashboard = () => {
       </AnimatePresence>
 
       {/* ─── PATIENT SIDEBAR ─────────────────────────────── */}
-      <aside className={`
-        fixed lg:relative z-[90] lg:z-10 h-full w-[220px]
-        bg-accent-maroon text-white flex flex-col border-r border-white/10
-        transition-transform duration-300 ease-in-out lg:translate-x-0
-        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        shadow-2xl lg:shadow-xl lg:shadow-accent-maroon/20 shrink-0
-      `}>
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-white/15 rounded-xl flex items-center justify-center border border-white/20">
-              <Heart className="w-5 h-5 text-white fill-white" />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-black tracking-tight leading-none">HeartSync</h1>
-              <p className="text-[8px] font-black text-white/50 uppercase tracking-widest leading-none mt-0.5">Patient Portal</p>
-            </div>
-          </div>
-          <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-1 text-white/60 hover:text-white">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto no-scrollbar">
-          {NAV_ITEMS.map(item => {
-            const Icon = item.icon;
-            const isActive = activeNav === item.name;
-            return (
-              <button key={item.name}
-                onClick={() => { setActiveNav(item.name); navigate(item.path); setIsSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold tracking-tight transition-all ${
-                  isActive
-                    ? 'bg-white/20 text-white shadow-sm'
-                    : 'text-white/65 hover:text-white hover:bg-white/10'
-                }`}>
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-white/60'}`} />
-                {item.name}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Bottom: Device status + Logout */}
-        <div className="px-3 py-4 border-t border-white/10 space-y-3">
-          <div className="p-3 bg-white/[0.07] rounded-xl border border-white/10 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-black text-white/50 uppercase tracking-wider">Device Status</span>
-              <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${isConnected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-400'}`}>
-                {isConnected ? '● Connected' : '● Offline'}
-              </span>
-            </div>
-            <p className="text-[11px] font-bold text-white">ESP32 HeartSync</p>
-            <div className="flex items-center justify-between text-[9px] text-white/50">
-              <span>Battery</span>
-              <span className="font-mono font-bold text-white/70">{isConnected ? '92%' : '--'}</span>
-            </div>
-          </div>
-          <button onClick={async () => { await logout(); navigate('/patient/login'); }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all">
-            <LogOut className="w-3.5 h-3.5" />Sign Out
-          </button>
-        </div>
-      </aside>
+      <PatientSidebar
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        isConnected={isConnected}
+        patientData={patientData}
+      />
 
       {/* ─── MAIN CONTENT ─────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
