@@ -14,6 +14,9 @@ import {
   classifyECGRhythm 
 } from "./src/services/ecgPipeline";
 import { checkEmergencyCondition } from "./backend/services/emergencyService";
+import { TelemetryIngestionService } from "./backend/services/telemetryIngestion";
+import { EscalationEngine } from "./backend/services/escalationEngine";
+import { EmergencyDispatchService } from "./backend/services/emergencyDispatch";
 
 dotenv.config();
 
@@ -30,6 +33,29 @@ async function startServer() {
 
   // Memory store to prevent duplicate alerts/WhatsApp sends
   const activeEmergencies = new Set<string>();
+
+  // HeartSync Engine Initialization
+  const telemetryIngestion = new TelemetryIngestionService(supabase);
+  const escalationEngine = new EscalationEngine(supabase);
+  const emergencyDispatchService = new EmergencyDispatchService(supabase);
+
+  // Start the Escalation Engine Loop
+  escalationEngine.start();
+
+  // API ROUTE: Telemetry Engine Ingestion (REST Alternative to WS)
+  app.post("/api/v1/telemetry", async (req, res) => {
+    const result = await telemetryIngestion.ingestPacket(req.body);
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  });
+
+  // API ROUTE: Emergency Dispatch
+  app.post("/api/v1/emergency/dispatch", async (req, res) => {
+    await emergencyDispatchService.dispatchEmergency(req, res);
+  });
 
 
   // API ROUTE: Receive IoT Vitals from Arduino
@@ -257,64 +283,37 @@ async function startServer() {
     }
 
     let replyText = "";
-    const configAdvice = "\n\n*(Note: HeartSync neural engine is running in high-security Clinical Fallback Mode because the backend GEMINI_API_KEY is currently invalid or missing. Please set a valid API key in your environment or AI Studio Settings menu to restore full conversational intelligence.)*";
 
-    // Matching ear & jaw pain specifically as requested by user
-    if ((query.includes("ear") && query.includes("jaw")) || (query.includes("ear") && query.includes("jw"))) {
-      replyText = `**Important Triage Information Regarding Jaw & Ear Pain:**\n\n` +
-        `You mentioned experiencing both **ear pain and jaw pain**. In cardiology and clinical triage, jaw pain—especially when it is radiating or accompanied by other discomforts—is a **well-known atypical symptom of cardiac distress** (such as angina or an impending myocardial infarction/heart attack).\n\n` +
-        `**Current Live Telemetry Status:**\n` +
-        `- **Heart Rate:** ${heartRate} BPM (${heartRate > 100 || heartRate < 55 ? 'Abnormal' : 'Within stable rest limits'})\n` +
-        `- **Blood Oxygen (SpO2):** ${spo2}% (${spo2 < 95 ? 'Sub-optimal' : 'Excellent'})\n\n` +
-        `**Immediate Triage Recommendations:**\n` +
-        `1. **Stop all physical exertion immediately.** Sit or lie down in a semi-reclined, comfortable position to reduce cardiac load.\n` +
-        `2. **Check for associated symptoms:** Are you experiencing any chest tightness, shortness of breath, lightheadedness, nausea, or sweating?\n` +
-        `3. **Protocol:** If you have chest pressure, difficulty breathing, or if the jaw/ear pain spreads to your neck, shoulder, or left arm, **click the EMERGENCY SOS button on your dashboard immediately** and call emergency services (911 or your local provider).\n` +
-        `4. If symptoms are mild, stay calm, rest quietly, and have someone monitor you. Consult with a doctor or cardiologist promptly to evaluate this pain.`;
-    } else if (query.includes("ear")) {
-      replyText = `**Pre-Clinical Assessment for Ear Pain:**\n\n` +
-        `Ear pain can result from localized issues (such as otitis, temporomandibular joint (TMJ) strain, or dental referred pain). However, if the ear pain is combined with neck, jaw, or shoulder discomfort, or if it is accompanied by shortness of breath, it must be evaluated for potential cardiac origin.\n\n` +
-        `**Vitals Review:**\n` +
-        `- **Heart Rate:** ${heartRate} BPM\n` +
-        `- **SpO2:** ${spo2}%\n\n` +
-        `**Recommendation:** Rest quietly. If the pain radiates down to your jaw or shoulder, or if you feel any chest heaviness, treat this as a potential emergency and call for medical help.`;
-    } else if (query.includes("jaw") || query.includes("jw") || query.includes("tooth") || query.includes("teeth")) {
-      replyText = `**Pre-Clinical Assessment for Jaw/Teeth Pain:**\n\n` +
-        `Jaw pain can be dental or musculoskeletal (like TMJ). However, **referred jaw pain** is a classic atypical presentation of cardiac ischemia (reduced blood flow to the heart). This is particularly true if the pain increases with physical effort and subsides with rest.\n\n` +
-        `**Your Live Telemetry:**\n` +
-        `- **Heart Rate:** ${heartRate} BPM\n` +
-        `- **SpO2:** ${spo2}%\n\n` +
-        `**Action Steps:** Sit down and rest. If this jaw pain is accompanied by chest tightness, pressure, or sweating, **please activate the Emergency SOS alert right away** and seek immediate emergency medical care.`;
-    } else if (query.includes("chest") || query.includes("pain") || query.includes("pressure") || query.includes("tight") || query.includes("squeeze")) {
-      replyText = `**🚨 CRITICAL WARNING: CHEST DISCOMFORT DETECTED**\n\n` +
-        `Any chest pain, tightness, squeezing, or pressure should be treated with the utmost clinical caution. This could indicate a major cardiovascular event.\n\n` +
-        `**Triage Instructions:**\n` +
-        `1. **Activate Emergency SOS immediately** using the button on your dashboard.\n` +
-        `2. Call your local emergency number (e.g., 911) right now. Do not attempt to drive yourself to the hospital.\n` +
-        `3. Sit down, stay as calm as possible, and loosen any tight clothing.\n` +
-        `4. If you have aspirin nearby and are not allergic or on contraindicating blood thinners, chew one adult aspirin (325 mg) or 2-4 low-dose baby aspirins.`;
+    const isEmergency = 
+      query.includes("chest") || query.includes("pain") || query.includes("pressure") || 
+      query.includes("tight") || query.includes("squeeze") || query.includes("breath") ||
+      query.includes("dizz") || query.includes("unconscious") || query.includes("stroke") ||
+      query.includes("allerg") || query.includes("faint") || query.includes("jaw");
+
+    if (isEmergency) {
+      replyText = `⚠️ Chest discomfort or severe symptoms can have many causes, including some that require urgent attention.\n\n` +
+        `If you are experiencing severe chest pain, pressure, difficulty breathing, sweating, fainting, or pain spreading to your arm/jaw:\n\n` +
+        `• Call emergency services immediately.\n` +
+        `• Sit down and avoid physical activity.\n` +
+        `• Keep someone nearby if possible.\n\n` +
+        `Can you tell me:\n` +
+        `- Your age?\n` +
+        `- When did the discomfort start?\n` +
+        `- Is it sharp, burning, squeezing, or pressure-like?\n` +
+        `- Are you having breathing difficulty?`;
     } else if (query.includes("emergency") || query.includes("protocol") || query.includes("sos") || query.includes("what should i do")) {
-      replyText = `**HeartSync AI - Pre-Clinical Emergency Protocols:**\n\n` +
-        `In the event of a suspected cardiac emergency (chest pain, radiating arm/jaw pain, severe shortness of breath, unexplained fainting, or sudden cold sweat):\n\n` +
-        `1. **ALERT:** Click the red **EMERGENCY SOS** button on your dashboard. This triggers automated SMS and notification alerts to your designated clinicians and emergency contacts with your live GPS location.\n` +
-        `2. **CALL SERVICES:** Phone emergency services (911 or your local equivalent) immediately.\n` +
-        `3. **REST:** Sit down or lie in a comfortable semi-upright position (W-position with knees bent is standard to reduce cardiac demand). Do not walk or move unnecessarily.\n` +
-        `4. **BREATHING:** Maintain slow, deep diaphragmatic breathing.\n` +
-        `5. **MEDICATION:** If prescribed nitroglycerin by your cardiologist, administer it as directed. Chew aspirin (325mg) if advised by dispatchers and if you are not allergic.`;
+      replyText = `**Emergency Guidance:**\n\n` +
+        `If you suspect a medical emergency:\n\n` +
+        `1. **ALERT:** Click the red **EMERGENCY SOS** button on your dashboard.\n` +
+        `2. **CALL SERVICES:** Phone emergency services (911) immediately.\n` +
+        `3. **REST:** Sit down or lie in a comfortable semi-upright position. Do not walk or move unnecessarily.\n` +
+        `4. Keep someone nearby if possible.`;
     } else {
-      replyText = `**HeartSync AI Pre-Clinical Triage Assistant:**\n\n` +
-        `I am monitoring your live telemetry feed. Here is a summary of your current physiological state:\n` +
-        `- **Heart Rate:** ${heartRate} BPM (${heartRate > 100 || heartRate < 55 ? 'Atypical / Elevated' : 'Optimal Rest Range'})\n` +
-        `- **SpO2 (Blood Oxygen):** ${spo2}% (${spo2 < 95 ? 'Sub-optimal' : 'Healthy Range'})\n` +
-        `- **Core Temperature:** ${temp.toFixed(1)}°C\n\n` +
-        `**Medical Assistant Guidelines:**\n` +
-        `- Describe any symptoms you are feeling (such as chest pain, jaw pain, shortness of breath, or palpitations).\n` +
-        `- If you are feeling unwell or have specific questions about your cardiac telemetry, let me know!\n` +
-        `- *In case of severe discomfort, always use the red Emergency SOS button on your dashboard.*`;
+      replyText = "I'm currently unable to provide a detailed AI response. If this is an emergency or you are experiencing severe symptoms, please contact emergency services immediately. You can also consult a healthcare professional.";
     }
 
     return {
-      text: replyText + configAdvice,
+      text: replyText,
       analysis: {
         status,
         suggestion,

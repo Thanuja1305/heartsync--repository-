@@ -90,6 +90,65 @@ The system is engineered for life-critical reliability and high throughput:
 - **Vite Bundling**: The frontend utilizes Vite's ESBuild, meaning the development server starts instantly, and production bundles are aggressively minified and tree-shaken.
 - **Real-time Database Subscriptions**: Instead of the frontend constantly polling the server for updates via HTTP (which creates massive overhead), it listens to Supabase's Postgres WAL (Write-Ahead Log) via WebSockets. Updates are pushed only when new rows are written, saving immense bandwidth.
 
+## 7. IoT Devices & Hardware Integrations
+
+The system is designed to integrate with standard, low-cost wearable cardiac sensors based on microcontrollers. 
+
+### Supported Devices & Capabilities:
+- **Primary Node (e.g., ESP32 / Arduino Wi-Fi):** Acts as the central hub worn by the patient, establishing a persistent WebSocket connection to the Node.js server.
+- **Heart Rate & SpO2 Sensor (e.g., MAX30102):** Uses pulse oximetry (photoplethysmography) to measure the user's peripheral capillary oxygen saturation (SpO2) and beats per minute (BPM).
+- **ECG Sensor (e.g., AD8232):** Captures the electrical activity of the heart, transmitting a continuous integer array (250 elements) representing the raw waveform morphology.
+- **Temperature Sensor (e.g., DHT11/DS18B20):** Measures ambient or skin temperature.
+
+### Data Ingestion:
+The hardware packets are streamed via WebSockets or the `/api/v1/telemetry` endpoint. The `TelemetryIngestionService` validates these packets strictly (HR must be 20-220, SpO2 70-100%, and ECG exactly 250 elements) before storing them in the `telemetry_packets` table.
+
+---
+
+## 8. Database Architecture Details
+
+The PostgreSQL database (managed via Supabase) is structured for high-frequency telemetry and relational patient tracking.
+
+| Table Name | Description and Stored Data |
+| :--- | :--- |
+| **`patients`** | Stores core demographic data (UUID, age, gender, blood group) and JSONB arrays for `contacts` (Family/Friends) and `live_location` (Lat/Lng for ambulance routing). |
+| **`profiles`** | Authenticated user profiles (Doctors, Admins, Patients) linked to Supabase Auth. |
+| **`telemetry_packets`** | A time-series optimized table storing raw validated hardware data. Columns include `patient_id`, `timestamp`, `heart_rate`, `spo2`, `temperature`, and `ecg` (Integer array restricted to 250 elements). |
+| **`incident_logs`** | State-tracking matrix for emergencies. Stores `incident_id`, `patient_id`, `start_time`, `last_checked_time`, an AI-generated `ai_summary`, and a PostgreSQL ENUM `current_state` ('PENDING_USER', 'RESOLVED', 'ESCALATED_TO_DOCTOR', 'EMERGENCY_DISPATCHED'). |
+| **`doctors` & `doctor_patients`**| Stores clinician credentials and mapping tables defining which cardiologist is assigned to monitor which patient. |
+
+---
+
+## 9. Multi-Stage Alert & Escalation Engine
+
+The `EscalationEngine` is a background Cron process running continuously (every 5 seconds) to track patient vitals and enforce a 5-minute lifecycle for critical incidents. 
+
+A condition is considered **Critical** if: Heart Rate < 60 or > 100 BPM, or SpO2 < 95%.
+
+### The Alert Lifecycle:
+1. **Stage 1: Initial Trigger (0 - 10 seconds)**
+   - **Trigger:** First batch of critical telemetry packets arrive.
+   - **System Action:** Creates an entry in `incident_logs` with state `PENDING_USER`.
+   - **Alert Sent:** Sends an immediate push notification to the Patient's App: *"Critical bio-metrics detected. Please sit down, remain still, and take necessary precautions. System is verifying reading stability."*
+
+2. **Stage 2: Resolution Check (10 seconds - 5 minutes)**
+   - **System Action:** The engine checks the last 30 seconds of live telemetry.
+   - **Scenario A (Stabilized):** If vitals return to normal thresholds continuously for a 30-second window, the state is marked `RESOLVED`. The patient is notified: *"Biometrics have stabilized. Continuous monitoring resumed."*
+   - **Scenario B (Unstable):** If vitals remain critical, the system stays in `PENDING_USER`. No global panic is triggered yet.
+
+3. **Stage 3: Doctor Escalation (At 5 Minutes)**
+   - **Trigger:** The critical condition has been sustained continuously for 5 minutes.
+   - **System Action:** State changes to `ESCALATED_TO_DOCTOR`.
+   - **Alert Sent:** The system pushes a live stream payload (via WebSockets/Supabase Realtime) directly to the assigned Cardiologist's portal. This payload includes the patient's full medical profile, the raw 250-element live ECG wave, and an automated AI clinical summary (e.g., *"Sustained Tachycardia detected over 300 seconds"*).
+
+4. **Stage 4: Automated Emergency Dispatch (Manual or Override)**
+   - **Trigger:** The Doctor verifies the live ECG feed and clicks the "Notify Emergency" button on the dashboard.
+   - **System Action:** Invokes `POST /api/v1/emergency/dispatch`. State changes to `EMERGENCY_DISPATCHED`.
+   - **Alerts Sent (3 Concurrent Webhooks):**
+     1. **Ambulance WhatsApp:** Sends formatted ID, live coordinates, and vitals to the dispatch channel.
+     2. **Ambulance Voice Call:** Initiates a Twilio TwiML automated text-to-speech phone call to the emergency desk.
+     3. **Family Loop:** Iterates through `patients.contacts` and sends customized WhatsApp alerts to family members with the ambulance routing address.
+
 ---
 
 ## Conclusion
