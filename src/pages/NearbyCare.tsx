@@ -113,27 +113,23 @@ const NearbyCare = () => {
       })
       .catch(err => console.error("OSM Doctor Search Error:", err));
 
-    // Fetch Cardiac Hospitals via Overpass
-    const hospQuery = `[out:json];node["amenity"="hospital"](around:${radius},${lat},${lng});out;`;
-    fetchFromOverpass(hospQuery)
+    // Fetch Cardiac Hospitals via Secure Backend proxy (RapidAPI Google Map Scraper + Overpass Fallback)
+    fetch('/api/v1/nearby-hospitals-rapid', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ latitude: lat, longitude: lng })
+    })
+      .then(res => res.json())
       .then(data => {
         if (data.elements) {
-          setHospitals(data.elements.map((el: any) => ({
-            id: el.id,
-            name: el.tags.name || 'General Hospital',
-            type: 'Cardiac specialty',
-            emergencyStatus: 'Active',
-            distance: `${(Math.random() * 10).toFixed(1)} km`,
-            beds: Math.floor(Math.random() * 50) + 10,
-            icu: Math.floor(Math.random() * 10) + 2,
-            photoURL: `https://images.unsplash.com/photo-1587350859728-117622bc7576?auto=format&fit=crop&q=80&w=400&sig=${el.id}`,
-            departments: ['Cardiology', 'ICU', 'ER']
-          })));
+          setHospitals(data.elements);
         }
         setLoading(false);
       })
       .catch(err => {
-        console.error("OSM Hospital Search Error:", err);
+        console.error("Hospital Proxy Search Error:", err);
         setLoading(false);
       });
 

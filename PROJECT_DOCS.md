@@ -12,15 +12,16 @@
 4. [Key Libraries Reference](#4-key-libraries-reference)
 5. [Environment Configuration](#5-environment-configuration)
 6. [IoT Devices & Hardware Integration](#6-iot-devices--hardware-integration)
-7. [Complete Database Architecture](#7-complete-database-architecture)
-8. [Backend Services Reference](#8-backend-services-reference)
-9. [API Endpoint Reference](#9-api-endpoint-reference)
-10. [Multi-Stage Alert & Escalation Engine](#10-multi-stage-alert--escalation-engine)
-11. [ECG Signal Processing Pipeline](#11-ecg-signal-processing-pipeline)
-12. [AI Integration (Google Gemini)](#12-ai-integration-google-gemini)
-13. [Authentication & Row Level Security](#13-authentication--row-level-security)
-14. [Performance & Reliability Optimizations](#14-performance--reliability-optimizations)
-15. [Build & Deployment](#15-build--deployment)
+7. [Firebase Database Architecture](#7-firebase-database-architecture-realtime--firestore)
+8. [Supabase / PostgreSQL Database Architecture](#8-supabase--postgresql-database-architecture)
+9. [Backend Services Reference](#9-backend-services-reference)
+10. [API Endpoint Reference](#10-api-endpoint-reference)
+11. [Multi-Stage Alert & Escalation Engine](#11-multi-stage-alert--escalation-engine)
+12. [ECG Signal Processing Pipeline](#12-ecg-signal-processing-pipeline)
+13. [AI Integration (Google Gemini)](#13-ai-integration-google-gemini)
+14. [Authentication & Row Level Security](#14-authentication--row-level-security)
+15. [Performance & Reliability Optimizations](#15-performance--reliability-optimizations)
+16. [Build & Deployment](#16-build--deployment)
 
 ---
 
@@ -244,7 +245,174 @@ Packets failing any validation are rejected with HTTP `400` and are **never stor
 
 ---
 
-## 7. Complete Database Architecture
+## 7. Firebase Database Architecture (Realtime + Firestore)
+
+HeartSync uses Firebase as its **primary real-time streaming layer**. Both the `server.ts` WebSocket handler and the frontend `iotService.ts` simulation write to these exact paths. The React frontend listens to these paths for live dashboard updates.
+
+### 7.1 Firebase Realtime Database (RTDB) — Live Streaming Paths
+
+**Project:** `heartsyncfinallast-one`
+**Region:** `asia-southeast1`
+**URL:** `https://heartsyncfinallast-one-default-rtdb.asia-southeast1.firebasedatabase.app`
+
+#### Path: `/users/{patientId}/liveReading`
+Primary live telemetry node consumed by `usePatientVitals` hook and `DoctorLiveMonitoring` page.
+
+```json
+{
+  "bpm": 75,
+  "heartRate": 75,
+  "spo2": 98,
+  "temperature": 36.8,
+  "humidity": 45,
+  "ecg": [512, 518, 522, 501, 487, "... up to 40 display-ready values"],
+  "status": "Normal",
+  "alertLevel": 1,
+  "alertReason": "Optimal",
+  "classification": "Normal Sinus Rhythm",
+  "confidence": 0.95,
+  "timestamp": 1784121595508,
+  "fingerDetected": true,
+  "leadsOff": false
+}
+```
+
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `bpm` / `heartRate` | `number` | MAX30102 PPG | Beats per minute (duplicated for backward compat) |
+| `spo2` | `number` | MAX30102 PPG | Peripheral oxygen saturation (70–100%) |
+| `temperature` | `number` | DHT11 | Body/ambient temperature °C |
+| `humidity` | `number` | DHT11 | Relative humidity % |
+| `ecg` | `number[]` | AD8232 → DSP pipeline | 40-point display-ready ECG (scaled 100–900) |
+| `status` | `string` | server.ts classifier | `"Normal"` / `"Warning"` / `"Critical"` |
+| `alertLevel` | `number` | server.ts classifier | 1 = Normal, 2 = Warning, 3 = Critical |
+| `alertReason` | `string` | server.ts classifier | `"Optimal"` / `"Abnormal Vitals"` / `"Critical Vitals"` |
+| `classification` | `string` | ECG pipeline | e.g., `"Normal Sinus Rhythm"`, `"Tachycardia"` |
+| `confidence` | `number` | ECG pipeline | 0–100 confidence score |
+| `timestamp` | `number` | `Date.now()` | Unix epoch milliseconds |
+| `fingerDetected` | `boolean` | MAX30102 IR check | Whether finger is placed on sensor |
+| `leadsOff` | `boolean` | AD8232 LO+/LO- | Whether ECG electrode leads are disconnected |
+
+#### Path: `/users/{patientId}/livereading`
+Mirror of `liveReading` (lowercase). Written simultaneously for legacy frontend compatibility.
+
+#### Path: `/liveHealthMetrics/{patientId}`
+Secondary indexed path used for cross-patient queries (e.g., doctor monitoring grid).
+Same schema as `/users/{patientId}/liveReading`.
+
+#### Path: `/ambulanceTracking/{patientId}` (Simulation only)
+```json
+{
+  "lat": 40.7108,
+  "lng": -74.0030,
+  "updatedAt": 1784121595508
+}
+```
+
+---
+
+### 7.2 Cloud Firestore Collections
+
+#### Collection: `users`
+Stores user profile data (both patients and doctors). Document ID = Firebase Auth UID.
+
+| Field | Type | Description |
+|---|---|---|
+| `uid` | `string` | Firebase Auth UID |
+| `email` | `string` | User email |
+| `fullName` | `string` | Display name |
+| `role` | `string` | `"patient"` or `"doctor"` |
+| `phoneNumber` | `string` | Contact number |
+| `photoURL` | `string` | Profile photo URL |
+| `profileCompleted` | `boolean` | Whether onboarding is complete |
+| `status` | `string` | `"approved"` / `"pending"` |
+| `createdAt` | `timestamp` | Account creation |
+| `updatedAt` | `timestamp` | Last profile update |
+
+#### Collection: `patients`
+Extended patient demographics. Document ID = Firebase Auth UID.
+
+| Field | Type | Description |
+|---|---|---|
+| `uid` | `string` | Firebase Auth UID |
+| `fullName` | `string` | Full legal name |
+| `email` | `string` | Contact email |
+| `dob` | `string` | Date of birth |
+| `gender` | `string` | Patient gender |
+| `status` | `string` | `"approved"` / `"pending"` |
+| `currentHeartRate` | `number` | Last known HR (for queue sorting) |
+| `isEmergencyActive` | `boolean` | Whether patient is in active emergency |
+
+#### Collection: `doctors`
+Extended doctor profile. Document ID = Firebase Auth UID.
+
+| Field | Type | Description |
+|---|---|---|
+| `uid` | `string` | Firebase Auth UID |
+| `fullName` | `string` | Full legal name |
+| `hospitalName` | `string` | Affiliated hospital |
+| `specialization` | `string` | e.g., `"Cardiologist"` |
+| `registrationNumber` | `string` | Medical license ID |
+| `verified` | `boolean` | Admin verification status |
+| `emergencySupport` | `boolean` | Accepts emergency cases |
+| `location` | `geopoint` | Hospital GPS coordinates |
+
+#### Collection: `liveHealthMetrics`
+Real-time vital snapshot per patient. Document ID = patient UID. Written by both `server.ts` and frontend simulation.
+
+| Field | Type | Description |
+|---|---|---|
+| `heartRate` | `number` | Current BPM |
+| `o2` | `number` | Current SpO2 % |
+| `temp` | `number` | Current temperature °C |
+| `status` | `string` | `"Optimal"` / `"Warning"` / `"Critical"` |
+| `timestamp` | `string` | ISO 8601 timestamp |
+| `isEmergency` | `boolean` | Whether critical alert is active |
+| `fingerDetected` | `boolean` | Sensor finger detection state |
+| `leadsOff` | `boolean` | ECG lead-off state |
+
+#### Collection: `emergencyAlerts`
+Active emergency alert per patient. Document ID = patient UID. Written by `server.ts` when `alertLevel === 3`.
+
+| Field | Type | Description |
+|---|---|---|
+| `patientId` | `string` | Patient UID |
+| `emergency` | `boolean` | Always `true` when written |
+| `severity` | `string` | `"CRITICAL"` / `"HIGH"` / `"MODERATE"` |
+| `detectedAt` | `number` | Unix epoch when alert was triggered |
+| `status` | `string` | `"PENDING_DOCTOR_VERIFICATION"` → `"CRITICAL_CONFIRMED"` → `"RESOLVED"` |
+| `patientName` | `string` | Patient display name |
+| `vitalsAtTrigger` | `object` | `{ heartRate, spo2, temp }` snapshot |
+| `verifiedBy` | `string?` | Doctor UID who verified |
+| `verifiedAt` | `number?` | Epoch when verified |
+
+#### Collection: `patientAssessments`
+Health assessment questionnaire responses.
+
+#### Collection: `notifications`
+In-app notification feed per patient/doctor.
+
+#### Collection: `patientHistory/{patientId}/logs`
+Time-series patient activity logs shown on the patient dashboard.
+
+---
+
+### 7.3 Data Write Origin Matrix
+
+This table shows which system components write to which Firebase paths:
+
+| Firebase Path | `server.ts` (WebSocket) | `server.ts` (REST `/api/vitals`) | Frontend `iotService.ts` (Simulation) |
+|---|:---:|:---:|:---:|
+| `/users/{id}/liveReading` (RTDB) | ✅ | ✅ | ✅ |
+| `/users/{id}/livereading` (RTDB) | ✅ | ✅ | ✅ |
+| `/liveHealthMetrics/{id}` (RTDB) | ✅ | ✅ | ✅ |
+| `liveHealthMetrics/{id}` (Firestore) | ✅ | ✅ | — |
+| `emergencyAlerts/{id}` (Firestore) | ✅ | ✅ | ✅ |
+| `notifications/{id}` (Firestore) | — | — | ✅ |
+
+---
+
+## 8. Supabase / PostgreSQL Database Architecture
 
 All tables live in a managed Supabase PostgreSQL instance. Row Level Security (RLS) is enabled on every table to enforce per-role access control.
 
