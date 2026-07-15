@@ -80,6 +80,27 @@
 8. If the incident reaches Stage 3, **Supabase Realtime broadcasts** escalation payload to the assigned Doctor Portal instance.
 9. At Stage 4, the doctor clicks **"Notify Emergency"** which calls `POST /api/v1/emergency/dispatch`, triggering three parallel Twilio webhooks.
 
+### Hybrid Dual-Backend Architecture
+
+HeartSync runs a hybrid dual-backend architecture combining a legacy Firebase layer (leveraged primarily by frontend React components for live health metrics, historical patient logs, and user profiles/authentication) with a modern high-performance Node.js & Supabase/PostgreSQL backend engine.
+
+#### 1. Firebase Backend (Frontend State & Realtime Layer)
+- **Firebase Realtime Database (RTDB):** Acts as the low-latency streaming endpoint for patient live telemetry readings under `/users/{uid}/liveReading`.
+- **Cloud Firestore:** Stores patient demographic profiles (`patients` collection), approved user roles (`users` collection), recent alert history (`emergencyAlerts` collection), and legacy vital snapshots (`liveHealthMetrics`).
+- **Firebase Auth:** Handles secure authentication, email/password signup, and role assignment for Patients and Doctors.
+
+#### 2. Node.js Express Server (`server.ts`) (Processing & Computation Engine)
+- Serves as the middle layer that runs the **ECG DSP (Digital Signal Processing) Pipeline** on incoming raw telemetry streams, validating sensor packet ranges, assessing signal quality, and classifying heart rhythms.
+- Integrated with **Google Gemini AI** (`@google/genai`) to generate automated clinical descriptions and explainable diagnosis recommendations.
+- Runs the background **EscalationEngine** loop every 5 seconds to track incident lifecycles.
+- Houses the Twilio API webhook integrations for ambulance notifications, text-to-speech calls, and emergency list broadcasts.
+
+#### 3. Supabase / PostgreSQL Stack (Relational Time-Series & Incident Engine)
+- Handles structured time-series reads/writes in the database for high-frequency telemetry.
+- **`telemetry_packets` table:** Stores validated, raw 250-element ECG frames and patient vitals for historical trend analysis.
+- **`incident_logs` table:** Tracks current emergency incidents and enforces state machine transitions ('PENDING_USER', 'RESOLVED', 'ESCALATED_TO_DOCTOR', 'EMERGENCY_DISPATCHED').
+- **Supabase Realtime Broadcasts:** Pushes real-time dashboard events and doctor escalation alerts over WebSockets directly to the web client.
+
 ---
 
 ## 3. Technology Stack
