@@ -7,6 +7,9 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { WebSocketServer } from "ws";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref as rtdbRef, set as rtdbSet } from "firebase/database";
+import { getFirestore, doc as fsDoc, setDoc as fsSetDoc } from "firebase/firestore";
 import { 
   cleanECGSignal, 
   assessSignalQuality, 
@@ -20,15 +23,38 @@ import { EmergencyDispatchService } from "./backend/services/emergencyDispatch";
 
 dotenv.config();
 
+// Initialize Firebase SDK on the backend
+const firebaseConfig = {
+  apiKey: process.env.VITE_FIREBASE_API_KEY,
+  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.VITE_FIREBASE_APP_ID,
+};
+
+let rtdb: any = null;
+let firestore: any = null;
+try {
+  console.info("[Firebase Backend] Initializing Firebase client with project:", firebaseConfig.projectId);
+  const firebaseApp = initializeApp(firebaseConfig);
+  rtdb = getDatabase(firebaseApp);
+  firestore = getFirestore(firebaseApp);
+  console.info("[Firebase Backend] Initialization successful.");
+} catch (err) {
+  console.error("[Firebase Backend] Error initializing Firebase client:", err);
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
 
-  // Initialize Supabase server connection
+  // Initialize Supabase server connection (using Service Role Key if available to bypass RLS)
   const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-  const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   // Memory store to prevent duplicate alerts/WhatsApp sends
@@ -78,6 +104,43 @@ async function startServer() {
       }]);
 
       if (error) throw error;
+
+      // Write to Firebase Realtime Database
+      if (rtdb) {
+        const liveReadingPayload = {
+          bpm: heartRate,
+          heartRate: heartRate,
+          spo2: spo2,
+          temperature: temperature,
+          humidity: 55,
+          ecg: ecg || [512],
+          status: is_emergency ? "Critical" : "Normal",
+          alertLevel: is_emergency ? 3 : 1,
+          alertReason: is_emergency ? "Critical Vitals" : "Optimal",
+          timestamp: Date.now(),
+          fingerDetected: true,
+          leadsOff: false
+        };
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("REST RTDB liveReading error:", e));
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("REST RTDB livereading error:", e));
+        rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("REST RTDB liveHealthMetrics error:", e));
+      }
+
+      // Write to Firebase Firestore
+      if (firestore) {
+        const firestoreVitals = {
+          heartRate: heartRate,
+          o2: spo2,
+          temp: temperature,
+          status: is_emergency ? "Critical" : "Optimal",
+          timestamp: new Date().toISOString(),
+          isEmergency: is_emergency,
+          fingerDetected: true,
+          leadsOff: false
+        };
+        fsSetDoc(fsDoc(firestore, 'liveHealthMetrics', patientId), firestoreVitals, { merge: true })
+          .catch(e => console.error("REST Firestore liveHealthMetrics error:", e));
+      }
       
       if (is_emergency) {
           const { data: alertData } = await supabase.from('alerts').insert([{
@@ -85,6 +148,26 @@ async function startServer() {
               severity: 'CRITICAL',
               message: `Critical vitals detected: HR ${heartRate}, SpO2 ${spo2}`
           }]).select();
+
+          if (firestore) {
+            const emergencyPayload = {
+              patientId,
+              emergency: true,
+              severity: "CRITICAL",
+              detectedAt: Date.now(),
+              status: "PENDING_DOCTOR_VERIFICATION",
+              patientName: "Patient " + patientId.substring(0, 5),
+              vitalsAtTrigger: {
+                heartRate: heartRate,
+                spo2: spo2,
+                temp: temperature
+              },
+              verifiedBy: null,
+              verifiedAt: null
+            };
+            fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), emergencyPayload, { merge: true })
+              .catch(e => console.error("REST Firestore emergencyAlerts error:", e));
+          }
           
           if (alertData && alertData[0]) {
              checkEmergencyCondition(supabase, alertData[0], {
@@ -696,6 +779,45 @@ async function startServer() {
             is_emergency: alertLevel === 3
           }]);
 
+          // Write to Firebase Realtime Database
+          if (rtdb) {
+            const liveReadingPayload = {
+              bpm: hr,
+              heartRate: hr,
+              spo2: o2,
+              temperature: temp,
+              humidity: humid,
+              ecg: finalEcg,
+              status,
+              alertLevel,
+              alertReason,
+              classification: classification.prediction,
+              confidence: classification.confidenceScore,
+              timestamp: Date.now(),
+              fingerDetected,
+              leadsOff
+            };
+            rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("RTDB liveReading error:", e));
+            rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("RTDB livereading error:", e));
+            rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("RTDB liveHealthMetrics error:", e));
+          }
+
+          // Write to Firebase Firestore
+          if (firestore) {
+            const firestoreVitals = {
+              heartRate: hr,
+              o2: o2,
+              temp: temp,
+              status: status === "Critical" ? "Critical" : status === "Warning" ? "Warning" : "Optimal",
+              timestamp: new Date().toISOString(),
+              isEmergency: alertLevel === 3,
+              fingerDetected,
+              leadsOff
+            };
+            fsSetDoc(fsDoc(firestore, 'liveHealthMetrics', patientId), firestoreVitals, { merge: true })
+              .catch(e => console.error("Firestore liveHealthMetrics error:", e));
+          }
+
           // Log trauma warnings if emergency is active
           if (alertLevel === 3) {
             const { data: alertData } = await supabase.from('alerts').insert([{
@@ -703,6 +825,26 @@ async function startServer() {
               severity: 'CRITICAL',
               message: `CRITICAL ALERT: HR=${hr}, SpO2=${o2}`
             }]).select();
+
+            if (firestore) {
+              const emergencyPayload = {
+                patientId,
+                emergency: true,
+                severity: "CRITICAL",
+                detectedAt: Date.now(),
+                status: "PENDING_DOCTOR_VERIFICATION",
+                patientName: "Patient " + patientId.substring(0, 5),
+                vitalsAtTrigger: {
+                  heartRate: hr,
+                  spo2: o2,
+                  temp: temp
+                },
+                verifiedBy: null,
+                verifiedAt: null
+              };
+              fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), emergencyPayload, { merge: true })
+                .catch(e => console.error("Firestore emergencyAlerts error:", e));
+            }
 
             if (alertData && alertData[0]) {
               checkEmergencyCondition(supabase, alertData[0], {
