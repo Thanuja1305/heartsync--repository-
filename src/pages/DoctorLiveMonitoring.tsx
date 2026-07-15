@@ -28,11 +28,20 @@ const DoctorLiveMonitoring = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [isDemoMode, setIsDemoMode] = useState(false);
+
+  // Clock to drive real-time connection timeout updates
+  useEffect(() => {
+    const t = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const isDemo = localStorage.getItem('demo_mode') === 'doctor' || !db.app.options.apiKey || db.app.options.apiKey.includes('mock-api-key');
 
     if (isDemo) {
+      setIsDemoMode(true);
       const demoPatients = [
         {
           id: 'demo-patient-001',
@@ -75,6 +84,7 @@ const DoctorLiveMonitoring = () => {
             temp: temp,
             humidity: 50,
             isEmergency: isCritical,
+            timestamp: Date.now(),
             _source: 'rtdb'
           };
         });
@@ -128,6 +138,7 @@ const DoctorLiveMonitoring = () => {
             bpm: v.heartRate,
             o2: v.o2,
             temp: v.temp,
+            timestamp: v.timestamp || Date.now(),
             isEmergency: v.heartRate > 140 || (v.o2 > 0 && v.o2 < 90),
             _source: 'rtdb',
           };
@@ -158,13 +169,13 @@ const DoctorLiveMonitoring = () => {
 
   const PatientRow = ({ patient }: { patient: any }) => {
     const v = vitalsMap[patient.id];
-    const status = getStatus(v);
-    const isConnected = v && v.heartRate > 0;
-    const STATUS = {
+    const isConnected = v && v.heartRate > 0 && (currentTime - (v.timestamp || 0) < 3000);
+    const status = isConnected ? getStatus(v) : 'stable';
+    const STATUS = isConnected ? {
       critical: { dot: 'bg-red-500', badge: 'text-red-400 bg-red-500/10 border border-red-500/20', label: 'Critical' },
       warning:  { dot: 'bg-orange-500', badge: 'text-orange-400 bg-orange-500/10 border border-orange-500/20', label: 'Moderate' },
       stable:   { dot: 'bg-green-500', badge: 'text-green-400 bg-green-500/10 border border-green-500/20', label: 'Stable' },
-    }[status];
+    }[status] : { dot: 'bg-slate-600', badge: 'text-slate-500 bg-slate-600/10 border border-slate-600/20', label: 'Offline' };
 
     return (
       <motion.div whileHover={{ backgroundColor: 'rgba(255,255,255,0.02)' }}
@@ -188,9 +199,9 @@ const DoctorLiveMonitoring = () => {
 
         {/* Vitals */}
         <div className="hidden md:flex items-center gap-6">
-          <VitalPill value={v?.heartRate ? `${v.heartRate} BPM` : null} label="Heart Rate" color="text-red-400" />
-          <VitalPill value={v?.o2 ? `${v.o2}%` : null} label="SpO₂" color="text-blue-400" />
-          <VitalPill value={v?.temp ? `${Number(v.temp).toFixed(1)}°C` : null} label="Temp" color="text-orange-400" />
+          <VitalPill value={isConnected && v?.heartRate ? `${v.heartRate} BPM` : null} label="Heart Rate" color="text-red-400" />
+          <VitalPill value={isConnected && v?.o2 ? `${v.o2}%` : null} label="SpO₂" color="text-blue-400" />
+          <VitalPill value={isConnected && v?.temp ? `${Number(v.temp).toFixed(1)}°C` : null} label="Temp" color="text-orange-400" />
         </div>
 
         {/* Status badge */}
@@ -232,6 +243,12 @@ const DoctorLiveMonitoring = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {/* Demo Mode Warning Badge */}
+            {isDemoMode && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider border bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse">
+                <span className="text-sm">⚡</span> DEMO MODE
+              </div>
+            )}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-xl">
               <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
               <span className="text-[9px] font-black text-red-400 uppercase tracking-widest">Live Sync</span>

@@ -169,6 +169,7 @@ const DoctorDashboard = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isPaused, setIsPaused] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const [notifCount, setNotifCount] = useState(0);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [activeEmergencyAlert, setActiveEmergencyAlert] = useState<any | null>(null);
@@ -180,6 +181,7 @@ const DoctorDashboard = () => {
     const isDemo = localStorage.getItem('demo_mode') === 'doctor' || !user?.uid || !db.app.options.apiKey || db.app.options.apiKey.includes('mock-api-key');
 
     if (isDemo) {
+      setIsDemoMode(true);
       const demoPatients = [
         {
           id: 'demo-patient-001',
@@ -378,11 +380,11 @@ const DoctorDashboard = () => {
     if (!selectedVitals) return false;
     if (isSimulating) return true;
     if (selectedVitals.lastSeen) {
-      return Date.now() - selectedVitals.lastSeen < 6000;
+      return Date.now() - selectedVitals.lastSeen < 3000;
     }
     if (selectedVitals.timestamp) {
       const ts = typeof selectedVitals.timestamp === 'string' ? Date.parse(selectedVitals.timestamp) : selectedVitals.timestamp;
-      return Date.now() - ts < 10000;
+      return Date.now() - ts < 3000;
     }
     return true;
   }, [selectedVitals, isSimulating]);
@@ -541,6 +543,12 @@ const DoctorDashboard = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* Demo Mode Warning Badge */}
+            {(isDemoMode || isSimulating) && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider border bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse">
+                <span className="text-sm">⚡</span> DEMO MODE
+              </div>
+            )}
             <div className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-[#1E293B] rounded-xl border border-white/5 cursor-pointer hover:bg-white/5 transition-colors">
               <Building2 className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-[10px] font-bold text-slate-300">City Heart Hospital</span>

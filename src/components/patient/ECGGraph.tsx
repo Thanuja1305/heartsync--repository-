@@ -8,9 +8,11 @@ interface ECGGraphProps {
   spo2?: number;
   classification?: string;
   leadsOff?: boolean;
+  isConnected?: boolean;
+  onSimulate?: () => void;
 }
 
-const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classification, leadsOff }) => {
+const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classification, leadsOff, isConnected, onSimulate }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<number[]>([]);
   const phaseRef = useRef<number>(0);
@@ -75,9 +77,9 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
   }, [liveEcg, isPaused]);
 
   // Clean heart rate (BPM) value
-  const bpm = typeof rawBpm === 'number' && !isNaN(rawBpm) && rawBpm > 0 ? rawBpm : 0;
-  const isStringEcg = typeof liveEcg === 'string';
-  const hasEcgValues = !isStringEcg && ((typeof liveEcg === 'number' && liveEcg > 0) || (Array.isArray(liveEcg) && liveEcg.length > 0));
+  const bpm = isConnected !== false && typeof rawBpm === 'number' && !isNaN(rawBpm) && rawBpm > 0 ? rawBpm : 0;
+  const isStringEcg = isConnected !== false && typeof liveEcg === 'string';
+  const hasEcgValues = isConnected !== false && !isStringEcg && ((typeof liveEcg === 'number' && liveEcg > 0) || (Array.isArray(liveEcg) && liveEcg.length > 0));
   const hasSignal = hasEcgValues || isStringEcg || bpm > 0;
 
   // Signal quality evaluation using raw array data or defaults
@@ -602,7 +604,7 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
         />
 
         {/* Clinical center warning only if no real ECG values are passed and heart rate is 0 */}
-        {!hasSignal && !leadsOff && (
+        {isConnected !== false && !hasSignal && !leadsOff && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/75 backdrop-blur-[1px] pointer-events-none">
             <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 shadow-md text-red-800 font-bold text-xs tracking-wider font-mono animate-pulse flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
@@ -611,12 +613,29 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
           </div>
         )}
 
-        {leadsOff && (
+        {isConnected !== false && leadsOff && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/85 backdrop-blur-[1.5px] pointer-events-none">
             <div className="bg-[#1E293B] border border-amber-500/30 rounded-xl px-5 py-3 shadow-md text-amber-400 font-black text-xs tracking-widest uppercase font-mono animate-pulse flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping"></span>
               ⚠️ Leads Off — Attach ECG Electrodes
             </div>
+          </div>
+        )}
+
+        {isConnected === false && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-[1.5px] p-4 text-center pointer-events-none">
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-5 py-3 shadow-md text-red-500 font-black text-xs tracking-widest uppercase font-mono animate-pulse flex items-center gap-2.5 mb-4">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+              ⚠️ CRITICAL: DEVICE DISCONNECTED - NO SIGNAL
+            </div>
+            {onSimulate && (
+              <button 
+                onClick={() => onSimulate()}
+                className="px-4 py-2 bg-accent-maroon hover:bg-[#630b0d] text-white rounded-xl text-[10px] font-black tracking-widest uppercase transition-all shadow-lg shadow-accent-maroon/20 pointer-events-auto cursor-pointer"
+              >
+                Simulate IoT Device
+              </button>
+            )}
           </div>
         )}
 

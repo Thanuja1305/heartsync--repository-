@@ -763,6 +763,28 @@ async function startServer() {
   const ecgBuffers = new Map<string, number[]>();
   const alertStateTracker = new Map<string, { abnormalStartTime: number | null, lastReportedLevel: number }>();
 
+  // ── Supabase Batch Queue ────────────────────────────────────────────────────
+  // High-frequency telemetry (1 packet/sec) is batched in memory and flushed
+  // to Supabase every 5 seconds as a single bulk INSERT to prevent connection
+  // pool exhaustion (max ~10 concurrent connections on free tier).
+  const supabaseBatchQueue = new Map<string, Array<{ patient_id: string; heart_rate: number; spo2: number; temperature: number }>>();
+
+  const SUPABASE_FLUSH_INTERVAL_MS = 5000; // Flush every 5 seconds
+  setInterval(async () => {
+    if (supabaseBatchQueue.size === 0) return;
+    const allRows: Array<{ patient_id: string; heart_rate: number; spo2: number; temperature: number }> = [];
+    supabaseBatchQueue.forEach((rows) => allRows.push(...rows));
+    supabaseBatchQueue.clear();
+    if (allRows.length === 0) return;
+    const { error } = await supabase.from('vitals').insert(allRows);
+    if (error) {
+      console.error(`[Supabase Batch] Failed to flush ${allRows.length} vitals rows:`, error.message);
+    } else {
+      console.log(`[Supabase Batch] Flushed ${allRows.length} vitals rows.`);
+    }
+  }, SUPABASE_FLUSH_INTERVAL_MS);
+  // ───────────────────────────────────────────────────────────────────────────
+
   wss.on("connection", (ws) => {
     console.log("[WEBSOCKET] Secure telemetry channel established.");
     let associatedPatientId: string | null = null;
@@ -906,19 +928,18 @@ async function startServer() {
           }
 
           if (wsPatientUUID) {
-            const { error: vErr } = await supabase.from('vitals').insert([{
-              patient_id: wsPatientUUID,
-              heart_rate: hr,
-              spo2: o2,
-              temperature: temp
-            }]);
-            if (vErr) console.error("[WS][Supabase] vitals insert error:", vErr);
+            // Queue for batch insert instead of per-packet write
+            const existing = supabaseBatchQueue.get(wsPatientUUID) || [];
+            existing.push({ patient_id: wsPatientUUID, heart_rate: hr, spo2: o2, temperature: temp });
+            supabaseBatchQueue.set(wsPatientUUID, existing);
           } else {
             console.warn(`[WS] Patient "${patientId}" not in DB — skipping Supabase vitals write. Firebase streaming active.`);
           }
 
-          // Write to Firebase Realtime Database
-
+          // ── Firebase RTDB: Metrics only (NO raw ECG array) ──────────────────
+          // ECG waveform is delivered directly via WebSocket broadcast below.
+          // Storing large ECG arrays in Firebase causes storage bloat and
+          // increased read latency on the dashboard. Only scalar metrics go here.
           if (rtdb) {
             const liveReadingPayload = {
               bpm: hr,
@@ -926,7 +947,7 @@ async function startServer() {
               spo2: o2,
               temperature: temp,
               humidity: humid,
-              ecg: finalEcg,
+              // ecg intentionally omitted — waveform delivered via WS broadcast
               status,
               alertLevel,
               alertReason,
@@ -941,7 +962,7 @@ async function startServer() {
             rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("RTDB liveHealthMetrics error:", e));
           }
 
-          // Write to Firebase Firestore
+          // ── Firestore: Scalar vitals only (already no ECG — keep as-is) ─────
           if (firestore) {
             const firestoreVitals = {
               heartRate: hr,
@@ -987,21 +1008,30 @@ async function startServer() {
             }
           }
 
-          // Return validated & annotated package back down ws channel and broadcast to all dashboards
+          // ── WebSocket Broadcast: Full payload including ECG waveform ─────────
+          // The ECG array is ONLY delivered here — directly to connected browser
+          // clients in real-time. This is the correct path for 40-point waveforms:
+          // no Firebase storage, no Supabase write, zero database overhead.
           const validatedMsg = JSON.stringify({
             type: "telemetry_validated",
             patientId,
-            data: liveValue,
+            data: liveValue, // liveValue includes ecg: finalEcg
             classification,
             quality
           });
 
-          // Send back to ESP32 source
-          ws.send(validatedMsg);
+          // Send acknowledgement back to ESP32 (stripped payload, no ECG echo)
+          ws.send(JSON.stringify({
+            type: "telemetry_validated",
+            patientId,
+            data: { bpm: hr, spo2: o2, temperature: temp, status, alertLevel },
+            classification: { prediction: classification.prediction, confidenceScore: classification.confidenceScore },
+            quality: { rating: quality.rating, score: quality.noiseLevelDb }
+          }));
 
-          // Broadcast immediately to all connected clients (like frontend dashboards)
+          // Broadcast full validated telemetry (with ECG) to all browser dashboard clients
           wss.clients.forEach((client) => {
-            if (client.readyState === 1) { // WebSocket.OPEN
+            if (client !== ws && client.readyState === 1) { // WebSocket.OPEN, skip ESP32 source
               client.send(validatedMsg);
             }
           });

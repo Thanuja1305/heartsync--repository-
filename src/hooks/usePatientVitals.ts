@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { rtdb } from '../lib/firebase';
 import { ref, onValue } from 'firebase/database';
 import { validateSensorPacket } from '../lib/dataValidator';
@@ -21,9 +21,9 @@ export function usePatientVitals(userId?: string) {
   const [vitals, setVitals] = useState<VitalsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const [lastSeen, setLastSeen] = useState<number>(Date.now());
-
-  const isDeviceOnline = loading ? true : (Date.now() - lastSeen < 6000);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false); // FAIL-SAFE: offline by default until real data arrives
+  
+  const lastSeenRef = useRef<number>(Date.now());
 
   useEffect(() => {
     if (!userId) {
@@ -53,7 +53,8 @@ export function usePatientVitals(userId?: string) {
     if (isDemo) {
       // Offline local simulation loop
       const interval = setInterval(() => {
-        setLastSeen(Date.now());
+        lastSeenRef.current = Date.now();
+        setIsDeviceOnline(true);
         const hr = Math.round(65 + Math.random() * 20); // 65-85 BPM
         const spo2 = Math.round(96 + Math.random() * 4); // 96-100%
         const temp = Number((36.4 + Math.random() * 1.2).toFixed(1)); // 36.4-37.6 °C
@@ -85,6 +86,15 @@ export function usePatientVitals(userId?: string) {
       return () => clearInterval(interval);
     }
 
+    // Set up an active timeout monitoring interval (runs every 1 second)
+    const checkTimeoutInterval = setInterval(() => {
+      const isOnline = Date.now() - lastSeenRef.current < 3000;
+      setIsDeviceOnline(isOnline);
+      if (!isOnline) {
+        useOfflineDefaults();
+      }
+    }, 1000);
+
     const processVitalsData = (data: any) => {
       if (!data) {
         useOfflineDefaults();
@@ -99,7 +109,16 @@ export function usePatientVitals(userId?: string) {
         return;
       }
 
-      setLastSeen(Date.now());
+      // Check if packet itself is stale (older than 3 seconds)
+      const packetAge = Date.now() - (live.timestamp || Date.now());
+      if (packetAge > 3000) {
+        setIsDeviceOnline(false);
+        useOfflineDefaults();
+        return;
+      }
+
+      lastSeenRef.current = Date.now();
+      setIsDeviceOnline(true);
 
       let status: 'Normal' | 'Warning' | 'Critical' = 'Normal';
       let alertLevel = 1;
@@ -154,7 +173,16 @@ export function usePatientVitals(userId?: string) {
     const handleTelemetry = (e: Event) => {
       const { patientId, data } = (e as CustomEvent).detail;
       if (patientId === userId) {
-        setLastSeen(Date.now());
+        // Check if packet itself is stale (older than 3 seconds)
+        const packetAge = Date.now() - (data.timestamp || Date.now());
+        if (packetAge > 3000) {
+          setIsDeviceOnline(false);
+          useOfflineDefaults();
+          return;
+        }
+
+        lastSeenRef.current = Date.now();
+        setIsDeviceOnline(true);
         setVitals({
           heartRate: data.bpm,
           bpm: data.bpm,
@@ -175,9 +203,11 @@ export function usePatientVitals(userId?: string) {
 
     return () => {
       unsub();
+      clearInterval(checkTimeoutInterval);
       window.removeEventListener('heartsync-telemetry', handleTelemetry);
     };
   }, [userId]);
 
   return { vitals, loading, error, isDeviceOnline };
 }
+

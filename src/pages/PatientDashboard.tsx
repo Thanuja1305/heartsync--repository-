@@ -45,20 +45,12 @@ const PatientDashboard = () => {
     return () => clearInterval(t);
   }, []);
 
-  // IoT Simulation — only if no real device after 10s
+  // IoT Simulation — runs if isSimulating is manually set to true
   useEffect(() => {
     if (!isSimulating || !userId) return;
     const stop = startIoTSimulation(userId);
     return () => stop();
   }, [isSimulating, userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const timer = setTimeout(() => {
-      if (!realVitals || !realVitals.bpm) setIsSimulating(true);
-    }, 10000);
-    return () => clearTimeout(timer);
-  }, [userId, realVitals]);
 
   // Firestore: patient profile + history
   useEffect(() => {
@@ -186,6 +178,13 @@ const PatientDashboard = () => {
               <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
               {isConnected ? 'Live' : 'Standby'}
             </div>
+
+            {/* Demo Mode Warning Badge */}
+            {isSimulating && (
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider border bg-amber-50 border-amber-300 text-amber-800 animate-pulse">
+                <span className="text-sm">⚡</span> DEMO MODE — Simulated Data
+              </div>
+            )}
 
             {/* Bell */}
             <button onClick={() => navigate('/patient/notifications')}
@@ -335,23 +334,15 @@ const PatientDashboard = () => {
               </div>
 
               <div className="flex-1 bg-[#0a0a0a] rounded-xl overflow-hidden relative border border-[#222]">
-                {isConnected ? (
-                  <ECGGraph bpm={vitals?.heartRate || 0} liveEcg={vitals?.ecg || []} spo2={vitals?.o2 || 0} classification={vitals?.current_condition} leadsOff={vitals?.leadsOff} />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
-                    <div className="w-14 h-14 mb-4 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                      <Heart className="w-7 h-7 text-red-500 fill-red-500/30" />
-                    </div>
-                    <h4 className="text-base font-black text-white mb-1">Device Not Connected</h4>
-                    <p className="text-xs text-slate-500 max-w-xs mb-5 leading-relaxed">
-                      Connect your HeartSync wearable device to start live cardiac telemetry.
-                    </p>
-                    <button onClick={() => setIsSimulating(true)}
-                      className="px-5 py-2.5 bg-accent-maroon text-white rounded-xl text-xs font-black tracking-wide transition-all hover:bg-[#630b0d] shadow-lg shadow-accent-maroon/20">
-                      Simulate Device
-                    </button>
-                  </div>
-                )}
+                <ECGGraph 
+                  bpm={isConnected ? Number(vitals?.heartRate || 0) : 0} 
+                  liveEcg={isConnected ? (vitals?.ecg || []) : []} 
+                  spo2={isConnected ? Number(vitals?.spo2 || 0) : 0} 
+                  classification={isConnected ? vitals?.current_condition : 'Flatline'} 
+                  leadsOff={vitals?.leadsOff}
+                  isConnected={isConnected}
+                  onSimulate={() => setIsSimulating(true)}
+                />
               </div>
 
               {/* ECG footer info */}

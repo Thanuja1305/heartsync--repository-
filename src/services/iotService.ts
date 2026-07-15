@@ -19,6 +19,12 @@ export interface HealthMetrics {
 export const startIoTSimulation = (patientId: string) => {
   let interval: any;
 
+  console.warn(
+    '%c⚠️ [HeartSync DEMO MODE] IoT Simulation Active — This is NOT real hardware data!',
+    'background: #991b1b; color: #fecaca; padding: 8px 16px; font-size: 14px; font-weight: bold; border-radius: 4px;'
+  );
+  console.warn(`[HeartSync DEMO] Simulating patient: ${patientId} | Interval: 1500ms`);
+
   // Initial ECG baseline
   let ecgBase = Array(40).fill(0).map(() => 40 + Math.random() * 20);
 
