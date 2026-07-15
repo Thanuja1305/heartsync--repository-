@@ -30,6 +30,60 @@ const DoctorLiveMonitoring = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
+    const isDemo = localStorage.getItem('demo_mode') === 'doctor' || !db.app.options.apiKey || db.app.options.apiKey.includes('mock-api-key');
+
+    if (isDemo) {
+      const demoPatients = [
+        {
+          id: 'demo-patient-001',
+          displayName: 'Sarah Jenkins',
+          fullName: 'Sarah Jenkins',
+          age: 38,
+          gender: 'Female',
+          bloodGroup: 'O-Positive',
+          phone: '+1 (555) 048-1920',
+          status: 'approved'
+        },
+        {
+          id: 'demo-patient-002',
+          displayName: 'Marcus Aurelius',
+          fullName: 'Marcus Aurelius',
+          age: 62,
+          gender: 'Male',
+          bloodGroup: 'A-Negative',
+          phone: '+1 (555) 890-4821',
+          status: 'approved'
+        }
+      ];
+      setPatients(demoPatients);
+      setLoading(false);
+
+      // Sim updates
+      const interval = setInterval(() => {
+        const updatedVitals: Record<string, any> = {};
+        demoPatients.forEach(p => {
+          const isCritical = p.id === 'demo-patient-002' && Math.random() > 0.85;
+          const isWarning = !isCritical && Math.random() > 0.7;
+          const hr = isCritical ? 145 : isWarning ? 105 : Math.round(65 + Math.random() * 20);
+          const spo2 = isCritical ? 88 : Math.round(96 + Math.random() * 4);
+          const temp = Number((36.4 + Math.random() * 1.2).toFixed(1));
+          
+          updatedVitals[p.id] = {
+            heartRate: hr,
+            bpm: hr,
+            o2: spo2,
+            temp: temp,
+            humidity: 50,
+            isEmergency: isCritical,
+            _source: 'rtdb'
+          };
+        });
+        setVitalsMap(prev => ({ ...prev, ...updatedVitals }));
+      }, 1500);
+
+      return () => clearInterval(interval);
+    }
+
     // 1. Fetch approved patients from Firestore
     const q = query(collection(db, 'users'), where('role', '==', 'patient'), where('status', '==', 'approved'));
     const unsubP = onSnapshot(q, snap => {

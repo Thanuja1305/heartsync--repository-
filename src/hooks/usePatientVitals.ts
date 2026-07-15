@@ -26,6 +26,8 @@ export function usePatientVitals(userId?: string) {
       return;
     }
 
+    const isDemo = localStorage.getItem('demo_mode') === 'patient' || userId.startsWith('demo-') || !rtdb.app.options.apiKey || rtdb.app.options.apiKey.includes('mock-api-key');
+
     const useOfflineDefaults = () => {
       setVitals({
         heartRate: 0,
@@ -40,6 +42,38 @@ export function usePatientVitals(userId?: string) {
       });
       setLoading(false);
     };
+
+    if (isDemo) {
+      // Offline local simulation loop
+      const interval = setInterval(() => {
+        const hr = Math.round(65 + Math.random() * 20); // 65-85 BPM
+        const spo2 = Math.round(96 + Math.random() * 4); // 96-100%
+        const temp = Number((36.4 + Math.random() * 1.2).toFixed(1)); // 36.4-37.6 °C
+        const isCritical = hr > 140 || (hr > 0 && hr < 40) || (spo2 > 0 && spo2 < 90);
+        const isWarning = !isCritical && (hr > 100 || hr < 55 || (spo2 > 0 && spo2 < 95));
+        const status = isCritical ? 'Critical' : isWarning ? 'Warning' : 'Normal';
+        const alertLevel = isCritical ? 3 : isWarning ? 2 : 1;
+        const alertReasonText = isCritical ? 'Critical Vitals' : isWarning ? 'Abnormal Vitals' : 'Optimal';
+
+        // Generate baseline ECG
+        const ecgArr = Array(40).fill(0).map(() => Math.floor(400 + Math.random() * 100));
+
+        setVitals({
+          heartRate: hr,
+          bpm: hr,
+          spo2: spo2,
+          temperature: temp,
+          humidity: 55,
+          ecg: ecgArr,
+          current_condition: status,
+          alertLevel: alertLevel,
+          alertReason: alertReasonText
+        });
+        setLoading(false);
+      }, 1500);
+
+      return () => clearInterval(interval);
+    }
 
     const processVitalsData = (data: any) => {
       if (!data) {
@@ -95,6 +129,7 @@ export function usePatientVitals(userId?: string) {
       }
     }, (err) => {
       setError(err);
+      useOfflineDefaults();
     });
 
     return () => {
