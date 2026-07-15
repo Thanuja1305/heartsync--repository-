@@ -40,6 +40,10 @@ interface VitalsRecord {
   humidity?: number;
   isEmergency?: boolean;
   ecg?: number[];
+  fingerDetected?: boolean;
+  leadsOff?: boolean;
+  lastSeen?: number;
+  timestamp?: number | string;
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -223,6 +227,9 @@ const DoctorDashboard = () => {
             temp: temp,
             humidity: 50,
             isEmergency: isCritical,
+            fingerDetected: true,
+            leadsOff: false,
+            lastSeen: Date.now(),
             ecg: Array(40).fill(0).map(() => Math.floor(400 + Math.random() * 100))
           };
         });
@@ -247,7 +254,21 @@ const DoctorDashboard = () => {
     });
     const unsubV = onSnapshot(collection(db, 'liveHealthMetrics'), snap => {
       const m: Record<string, VitalsRecord> = {};
-      snap.forEach(d => { m[d.id] = d.data() as VitalsRecord; });
+      snap.forEach(d => { 
+        const docData = d.data();
+        m[d.id] = {
+          ...docData,
+          heartRate: docData.heartRate,
+          bpm: docData.heartRate,
+          o2: docData.o2,
+          temp: docData.temp,
+          humidity: docData.humidity,
+          isEmergency: docData.isEmergency,
+          fingerDetected: docData.fingerDetected !== false,
+          leadsOff: docData.leadsOff === true,
+          lastSeen: docData.timestamp ? Date.parse(docData.timestamp) : Date.now()
+        } as VitalsRecord; 
+      });
       setVitalsMap(prev => ({ ...prev, ...m }));
     });
     const unsubR = onValue(ref(rtdb, '/users'), snapshot => {
@@ -264,6 +285,9 @@ const DoctorDashboard = () => {
             heartRate: validated.heartRate, bpm: validated.heartRate,
             o2: validated.o2, temp: validated.temp, humidity: validated.humidity,
             isEmergency: live.isEmergency === true || validated.heartRate > 140 || (validated.o2 > 0 && validated.o2 < 90),
+            fingerDetected: live.fingerDetected !== false && validated.heartRate > 0 && validated.o2 > 0,
+            leadsOff: live.leadsOff === true,
+            lastSeen: Date.now()
           };
         }
       });
@@ -277,7 +301,33 @@ const DoctorDashboard = () => {
       const activeEmergency = a.find((al: any) => al.status !== 'RESOLVED' && !al.acknowledged && al.emergency);
       setActiveEmergencyAlert(activeEmergency || null);
     });
-    return () => { unsubP(); unsubV(); unsubA(); unsubR(); };
+
+    const handleTelemetry = (e: Event) => {
+      const { patientId, data } = (e as CustomEvent).detail;
+      setVitalsMap(prev => ({
+        ...prev,
+        [patientId]: {
+          heartRate: data.bpm,
+          bpm: data.bpm,
+          o2: data.spo2,
+          temp: data.temperature,
+          humidity: data.humidity,
+          isEmergency: data.alertLevel === 3,
+          fingerDetected: data.fingerDetected,
+          leadsOff: data.leadsOff,
+          lastSeen: Date.now()
+        }
+      }));
+    };
+    window.addEventListener('heartsync-telemetry', handleTelemetry);
+
+    return () => { 
+      unsubP(); 
+      unsubV(); 
+      unsubA(); 
+      unsubR(); 
+      window.removeEventListener('heartsync-telemetry', handleTelemetry);
+    };
   }, [user?.uid]);
 
   useEffect(() => {
@@ -324,13 +374,29 @@ const DoctorDashboard = () => {
     return items.slice(0, 4);
   }, [alerts, currentTime]);
 
-  const hr = selectedVitals?.heartRate || selectedVitals?.bpm;
-  const o2 = selectedVitals?.o2;
-  const temp = selectedVitals?.temp;
-  const respRate = hr ? Math.max(12, Math.round(12 + (hr - 70) * 0.15)) : null;
-  const bpSys = hr ? Math.min(180, Math.max(100, Math.round(110 + (hr - 70) * 0.5))) : null;
+  const isDeviceConnected = useMemo(() => {
+    if (!selectedVitals) return false;
+    if (isSimulating) return true;
+    if (selectedVitals.lastSeen) {
+      return Date.now() - selectedVitals.lastSeen < 6000;
+    }
+    if (selectedVitals.timestamp) {
+      const ts = typeof selectedVitals.timestamp === 'string' ? Date.parse(selectedVitals.timestamp) : selectedVitals.timestamp;
+      return Date.now() - ts < 10000;
+    }
+    return true;
+  }, [selectedVitals, isSimulating]);
+
+  const fingerDetected = selectedVitals?.fingerDetected !== false;
+  const leadsOff = selectedVitals?.leadsOff === true;
+
+  const hr = isDeviceConnected && fingerDetected ? (selectedVitals?.heartRate || selectedVitals?.bpm) : 0;
+  const o2 = isDeviceConnected && fingerDetected ? selectedVitals?.o2 : 0;
+  const temp = isDeviceConnected ? selectedVitals?.temp : 0;
+  const respRate = isDeviceConnected && fingerDetected && hr ? Math.max(12, Math.round(12 + (hr - 70) * 0.15)) : null;
+  const bpSys = isDeviceConnected && fingerDetected && hr ? Math.min(180, Math.max(100, Math.round(110 + (hr - 70) * 0.5))) : null;
   const bpDia = bpSys ? Math.round(bpSys * 0.65) : null;
-  const ecgPath = useECGPath(!isPaused && (isSimulating || !!selectedVitals));
+  const ecgPath = useECGPath(!isPaused && (isSimulating || (isDeviceConnected && !!selectedVitals)));
 
   const handleEmergency = useCallback(async () => {
     if (!selectedPatient) return;
@@ -583,11 +649,11 @@ const DoctorDashboard = () => {
                 </div>
                 <div className="flex items-center gap-4 mt-1">
                   <span className="flex items-center gap-1.5 text-[10px] font-bold text-green-400">
-                    <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                    {selectedVitals ? 'Connected' : 'Standby'}
+                    <div className={`w-1.5 h-1.5 rounded-full ${isDeviceConnected ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
+                    {isDeviceConnected ? 'Connected' : 'Offline'}
                   </span>
                   <span className="flex items-center gap-1.5 text-[10px] font-bold text-blue-400">
-                    <Wifi className="w-3 h-3" />Signal: {selectedVitals ? 'Excellent' : 'Waiting'}
+                    <Wifi className="w-3 h-3" />Signal: {isDeviceConnected ? 'Excellent' : 'Waiting'}
                   </span>
                 </div>
               </div>
@@ -610,12 +676,26 @@ const DoctorDashboard = () => {
                 backgroundSize: '25px 25px'
               }} />
               <svg className="absolute inset-0 w-full h-full" viewBox="0 0 504 100" preserveAspectRatio="none">
-                {ecgPath
+                {ecgPath && isDeviceConnected && !leadsOff
                   ? <path d={ecgPath} fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
                       style={{ filter: 'drop-shadow(0 0 5px rgba(239,68,68,0.7))' }} />
                   : <line x1="0" y1="50" x2="504" y2="50" stroke="#ef4444" strokeWidth="0.5" strokeDasharray="4,4" opacity="0.3" />
                 }
               </svg>
+              {leadsOff && isDeviceConnected && (
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-[1.5px] pointer-events-none">
+                  <div className="bg-[#1E293B] border border-amber-500/30 rounded-xl px-4 py-2 text-amber-400 font-black text-[10px] tracking-wider uppercase font-mono animate-pulse">
+                    ⚠️ Leads Off — Attach ECG Electrodes
+                  </div>
+                </div>
+              )}
+              {!isDeviceConnected && (
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-[1.5px] pointer-events-none">
+                  <div className="bg-[#1E293B] border border-red-500/30 rounded-xl px-4 py-2 text-red-500 font-black text-[10px] tracking-wider uppercase font-mono animate-pulse">
+                    ⚠️ DEVICE OFFLINE
+                  </div>
+                </div>
+              )}
               <div className="absolute top-2 left-4 flex gap-5 text-[8px] font-black text-slate-700 select-none">
                 <span>P</span><span>Q</span><span className="text-red-700">R</span><span>S</span><span>T</span>
               </div>
@@ -646,16 +726,16 @@ const DoctorDashboard = () => {
             <div className="mx-5 mt-4 shrink-0">
               <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest mb-2">Live Vitals</p>
               <div className="flex gap-2">
-                <VitalBox icon={HeartPulse} value={hr} unit="BPM" label="Heart Rate" color="text-red-400"
-                  sub={hr ? (hr > 100 ? 'Elevated' : 'Normal range') : 'Live Reading'} />
-                <VitalBox icon={Droplets} value={o2} unit="%" label="SpO₂" color="text-blue-400"
-                  sub={o2 ? (o2 < 95 ? 'Below Normal' : 'Oxygen Stable') : 'Oxygen Sat'} />
-                <VitalBox icon={Thermometer} value={temp ? temp.toFixed(1) : null} unit="°C" label="Temperature" color="text-orange-400"
-                  sub={temp ? (temp > 38 ? 'Elevated' : 'Body Normal') : 'Body Temp'} />
-                <VitalBox icon={Activity} value={bpSys && bpDia ? `${bpSys}/${bpDia}` : null} unit="mmHg" label="Blood Pressure" color="text-violet-400"
-                  sub={bpSys ? 'Sys/Dia' : 'Reading...'} />
-                <VitalBox icon={Wind} value={respRate} unit="" label="Resp Rate" color="text-teal-400"
-                  sub={respRate ? 'Breaths/min' : 'Respiratory Rate'} />
+                <VitalBox icon={HeartPulse} value={isDeviceConnected ? (fingerDetected ? hr : 'Place finger') : '--'} unit={isDeviceConnected && fingerDetected ? "BPM" : ""} label="Heart Rate" color="text-red-400"
+                  sub={isDeviceConnected ? (fingerDetected ? (hr > 100 ? 'Elevated' : 'Normal range') : 'Place finger on sensor') : 'Device Offline'} />
+                <VitalBox icon={Droplets} value={isDeviceConnected ? (fingerDetected ? `${o2}` : 'Place finger') : '--'} unit={isDeviceConnected && fingerDetected ? "%" : ""} label="SpO₂" color="text-blue-400"
+                  sub={isDeviceConnected ? (fingerDetected ? (o2 < 95 ? 'Below Normal' : 'Oxygen Stable') : 'Place finger on sensor') : 'Device Offline'} />
+                <VitalBox icon={Thermometer} value={isDeviceConnected ? (temp ? temp.toFixed(1) : 'No reading') : '--'} unit={isDeviceConnected && temp ? "°C" : ""} label="Temperature" color="text-orange-400"
+                  sub={isDeviceConnected ? (temp ? (temp > 38 ? 'Elevated' : 'Body Normal') : 'No reading') : 'Device Offline'} />
+                <VitalBox icon={Activity} value={isDeviceConnected ? (fingerDetected && bpSys && bpDia ? `${bpSys}/${bpDia}` : 'No reading') : '--'} unit={isDeviceConnected && fingerDetected && bpSys ? "mmHg" : ""} label="Blood Pressure" color="text-violet-400"
+                  sub={isDeviceConnected ? (fingerDetected ? 'Sys/Dia' : 'No reading') : 'Device Offline'} />
+                <VitalBox icon={Wind} value={isDeviceConnected ? (fingerDetected && respRate ? respRate : 'No reading') : '--'} unit="" label="Resp Rate" color="text-teal-400"
+                  sub={isDeviceConnected ? (fingerDetected ? 'Breaths/min' : 'No reading') : 'Device Offline'} />
               </div>
             </div>
 

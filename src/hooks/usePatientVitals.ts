@@ -13,12 +13,17 @@ export interface VitalsData {
   current_condition?: string;
   alertLevel?: number; // 1 = optimal, 2 = warning, 3 = critical
   alertReason?: string;
+  fingerDetected?: boolean;
+  leadsOff?: boolean;
 }
 
 export function usePatientVitals(userId?: string) {
   const [vitals, setVitals] = useState<VitalsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [lastSeen, setLastSeen] = useState<number>(Date.now());
+
+  const isDeviceOnline = loading ? true : (Date.now() - lastSeen < 6000);
 
   useEffect(() => {
     if (!userId) {
@@ -38,7 +43,9 @@ export function usePatientVitals(userId?: string) {
         ecg: 512,
         current_condition: 'Waiting for Device...',
         alertLevel: 1,
-        alertReason: 'Waiting for Device...'
+        alertReason: 'Waiting for Device...',
+        fingerDetected: false,
+        leadsOff: false
       });
       setLoading(false);
     };
@@ -46,6 +53,7 @@ export function usePatientVitals(userId?: string) {
     if (isDemo) {
       // Offline local simulation loop
       const interval = setInterval(() => {
+        setLastSeen(Date.now());
         const hr = Math.round(65 + Math.random() * 20); // 65-85 BPM
         const spo2 = Math.round(96 + Math.random() * 4); // 96-100%
         const temp = Number((36.4 + Math.random() * 1.2).toFixed(1)); // 36.4-37.6 °C
@@ -67,7 +75,9 @@ export function usePatientVitals(userId?: string) {
           ecg: ecgArr,
           current_condition: status,
           alertLevel: alertLevel,
-          alertReason: alertReasonText
+          alertReason: alertReasonText,
+          fingerDetected: true,
+          leadsOff: false
         });
         setLoading(false);
       }, 1500);
@@ -89,15 +99,22 @@ export function usePatientVitals(userId?: string) {
         return;
       }
 
+      setLastSeen(Date.now());
+
       let status: 'Normal' | 'Warning' | 'Critical' = 'Normal';
       let alertLevel = 1;
 
-      if (validated.o2 > 0 && (validated.o2 < 90 || validated.heartRate > 130 || (validated.heartRate > 0 && validated.heartRate < 45))) {
-        status = 'Critical';
-        alertLevel = 3;
-      } else if (validated.temp > 38 || (validated.o2 > 0 && validated.o2 < 95)) {
-        status = 'Warning';
-        alertLevel = 2;
+      const fingerDetected = live.fingerDetected === true || (validated.heartRate > 0 && validated.o2 > 0);
+      const leadsOff = live.leadsOff === true;
+
+      if (fingerDetected) {
+        if (validated.o2 > 0 && (validated.o2 < 90 || validated.heartRate > 130 || (validated.heartRate > 0 && validated.heartRate < 45))) {
+          status = 'Critical';
+          alertLevel = 3;
+        } else if (validated.temp > 38 || (validated.o2 > 0 && validated.o2 < 95)) {
+          status = 'Warning';
+          alertLevel = 2;
+        }
       }
 
       let alertReasonText = status === 'Critical' ? 'Critical Vitals' : status === 'Warning' ? 'Abnormal Vitals' : 'Optimal';
@@ -111,7 +128,9 @@ export function usePatientVitals(userId?: string) {
         ecg: validated.ecg,
         current_condition: status,
         alertLevel: alertLevel,
-        alertReason: alertReasonText
+        alertReason: alertReasonText,
+        fingerDetected,
+        leadsOff
       });
       setLoading(false);
     };
@@ -132,10 +151,33 @@ export function usePatientVitals(userId?: string) {
       useOfflineDefaults();
     });
 
+    const handleTelemetry = (e: Event) => {
+      const { patientId, data } = (e as CustomEvent).detail;
+      if (patientId === userId) {
+        setLastSeen(Date.now());
+        setVitals({
+          heartRate: data.bpm,
+          bpm: data.bpm,
+          spo2: data.spo2,
+          temperature: data.temperature,
+          humidity: data.humidity,
+          ecg: data.ecg,
+          current_condition: data.status,
+          alertLevel: data.alertLevel,
+          alertReason: data.alertReason,
+          fingerDetected: data.fingerDetected,
+          leadsOff: data.leadsOff
+        });
+        setLoading(false);
+      }
+    };
+    window.addEventListener('heartsync-telemetry', handleTelemetry);
+
     return () => {
       unsub();
+      window.removeEventListener('heartsync-telemetry', handleTelemetry);
     };
   }, [userId]);
 
-  return { vitals, loading, error };
+  return { vitals, loading, error, isDeviceOnline };
 }

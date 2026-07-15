@@ -7,9 +7,10 @@ interface ECGGraphProps {
   liveEcg?: number | number[] | string;
   spo2?: number;
   classification?: string;
+  leadsOff?: boolean;
 }
 
-const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classification }) => {
+const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classification, leadsOff }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<number[]>([]);
   const phaseRef = useRef<number>(0);
@@ -601,11 +602,20 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
         />
 
         {/* Clinical center warning only if no real ECG values are passed and heart rate is 0 */}
-        {!hasSignal && (
+        {!hasSignal && !leadsOff && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/75 backdrop-blur-[1px] pointer-events-none">
             <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 shadow-md text-red-800 font-bold text-xs tracking-wider font-mono animate-pulse flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
               NO TELEMETRY FEED IDENTIFIED
+            </div>
+          </div>
+        )}
+
+        {leadsOff && (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/85 backdrop-blur-[1.5px] pointer-events-none">
+            <div className="bg-[#1E293B] border border-amber-500/30 rounded-xl px-5 py-3 shadow-md text-amber-400 font-black text-xs tracking-widest uppercase font-mono animate-pulse flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+              ⚠️ Leads Off — Attach ECG Electrodes
             </div>
           </div>
         )}

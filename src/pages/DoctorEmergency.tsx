@@ -21,6 +21,20 @@ import { collection, query, orderBy, onSnapshot, limit, addDoc, serverTimestamp,
 import { db } from '../lib/firebase';
 import DoctorSidebar from '../components/DoctorSidebar';
 
+const PlusIcon = (props: any) => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+
+const GridStat = ({ label, value }: any) => (
+  <div className="flex justify-between items-center py-1">
+    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</span>
+    <span className="text-xl font-black text-white italic">{value}</span>
+  </div>
+);
+
 const DoctorEmergency = () => {
   const navigate = useNavigate();
   const [dispatches, setDispatches] = useState<any[]>([]);
@@ -47,7 +61,7 @@ const DoctorEmergency = () => {
   const completedDispatches = dispatches.filter(d => d.status === 'COMPLETED');
 
   return (
-    <div className="min-h-screen bg-slate-50 flex overflow-hidden">
+    <div className="flex h-screen bg-[#0B1120] text-white overflow-hidden">
       <title>Emergency Dispatch | HeartSync</title>
       
       {/* MOBILE OVERLAY */}
@@ -58,192 +72,175 @@ const DoctorEmergency = () => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[80] lg:hidden"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] lg:hidden"
           />
         )}
       </AnimatePresence>
 
       <DoctorSidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
       
-      <main className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        <header className="h-20 md:h-24 bg-white border-b border-slate-200 px-6 md:px-12 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4">
-             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-accent-maroon transition-all">
-                <Menu className="w-6 h-6" />
-             </button>
-             <div>
-               <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter italic">Emergency Dispatch</h2>
-               <p className="hidden md:block text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mt-1">Institutional First Response Portal</p>
-             </div>
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Header */}
+        <header className="h-16 bg-[#111827] border-b border-white/[0.06] px-4 lg:px-6 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-base font-black text-white tracking-tight leading-none">Emergency Dispatch</h1>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mt-0.5">Institutional First Response Portal</p>
+            </div>
           </div>
           
-          <div className="flex items-center gap-4">
-             <button className="px-4 md:px-6 py-2.5 md:py-3 bg-accent-maroon text-white rounded-xl md:rounded-2xl font-black text-[9px] md:text-[10px] uppercase tracking-widest shadow-xl shadow-accent-maroon/20 flex items-center gap-2 md:gap-3 hover:scale-105 active:scale-95 transition-all">
-                <PlusIcon className="w-3 md:w-4 h-3 md:h-4 shrink-0" />
-                <span className="hidden sm:inline">Manual Dispatch Trigger</span>
-                <span className="sm:hidden">Trigger</span>
-             </button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+              <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+              <span className="text-[9px] font-black text-red-400 uppercase tracking-widest">{activeDispatches.length} Active</span>
+            </div>
+            <button className="px-4 py-2 bg-accent-maroon text-white rounded-xl font-black text-[9px] uppercase tracking-widest shadow-xl shadow-accent-maroon/20 flex items-center gap-2 hover:scale-105 active:scale-95 transition-all">
+              <PlusIcon className="w-3 h-3 shrink-0" />
+              <span className="hidden sm:inline">Manual Dispatch</span>
+            </button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 md:p-12 no-scrollbar">
-           <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 md:gap-10">
-              
-              {/* LEFT & CENTER: Active Dispatches */}
-              <div className="lg:col-span-2 space-y-8 md:space-y-10">
-                 <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                       <Ambulance className="w-5 h-5 text-accent-maroon" />
-                       <h3 className="text-xs md:text-sm font-black text-slate-900 uppercase tracking-[0.15em] md:tracking-[0.2em]">Active Deployments</h3>
-                    </div>
-                    <span className="px-3 md:px-4 py-1.5 md:py-2 bg-accent-maroon/10 text-accent-maroon text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-lg md:rounded-xl whitespace-nowrap">
-                       {activeDispatches.length} Units En Route
-                    </span>
-                 </div>
+        <div className="flex-1 overflow-y-auto no-scrollbar p-5 space-y-5">
+          {/* Stats Row */}
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: 'Active Units', value: activeDispatches.length, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20', icon: Ambulance },
+              { label: 'Completed', value: completedDispatches.length, color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/20', icon: CheckCircle2 },
+              { label: 'Avg Response', value: '4m 20s', color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20', icon: Clock },
+            ].map(stat => (
+              <div key={stat.label} className="bg-[#111827] rounded-2xl border border-white/[0.06] p-4 flex items-center gap-4">
+                <div className={`w-11 h-11 rounded-xl border flex items-center justify-center shrink-0 ${stat.bg}`}>
+                  <stat.icon className={`w-5 h-5 ${stat.color}`} />
+                </div>
+                <div>
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{stat.label}</p>
+                  <p className={`text-2xl font-black leading-tight ${stat.color}`}>{stat.value}</p>
+                </div>
+              </div>
+            ))}
+          </div>
 
-                 <div className="space-y-6">
-                    {loading ? (
-                      <div className="py-16 md:py-20 text-center bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 animate-pulse">
-                         <div className="w-10 h-10 bg-slate-100 rounded-full mx-auto mb-4" />
-                         <p className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest">Scanning Dispatch Nodes...</p>
-                      </div>
-                    ) : activeDispatches.length > 0 ? activeDispatches.map((dispatch) => (
-                      <div key={dispatch.id} className="bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 shadow-premium p-6 md:p-10 relative overflow-hidden group">
-                         <div className="absolute top-0 right-0 p-6 md:p-8">
-                            <Navigation className="w-8 h-8 md:w-10 md:h-10 text-slate-50 group-hover:text-accent-maroon/10 transition-colors duration-500" />
-                         </div>
-                         
-                         <div className="flex flex-col xl:flex-row gap-8 md:gap-10 relative z-10">
-                            <div className="flex-1 space-y-6 md:space-y-8">
-                               <div className="flex items-center gap-4 md:gap-6">
-                                  <div className="w-12 h-12 md:w-16 md:h-16 bg-slate-900 rounded-2xl md:rounded-3xl flex items-center justify-center text-white text-lg md:text-2xl font-black shrink-0">
-                                     {dispatch.ambulanceId?.charAt(0) || 'A'}
-                                  </div>
-                                  <div className="min-w-0">
-                                     <h4 className="text-lg md:text-xl font-black text-slate-900 italic tracking-tighter mb-1 truncate">Unit {dispatch.ambulanceId || 'Alpha-1'}</h4>
-                                     <div className="flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 bg-accent-maroon rounded-full animate-pulse shrink-0" />
-                                        <span className="text-[9px] md:text-[10px] font-black text-accent-maroon uppercase tracking-widest truncate">{dispatch.status?.replace('_', ' ')}</span>
-                                     </div>
-                                  </div>
-                               </div>
-
-                               <div className="grid grid-cols-2 gap-4 md:gap-8">
-                                  <div className="min-w-0">
-                                     <p className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 truncate">Primary Patient</p>
-                                     <p className="text-xs md:text-sm font-bold text-slate-900 tracking-tight truncate">{dispatch.patientName || 'Emergency Node'}</p>
-                                  </div>
-                                  <div className="min-w-0">
-                                     <p className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 truncate">Impact Level</p>
-                                     <p className="text-xs md:text-sm font-bold text-accent-maroon tracking-tight truncate">Level 1 - Critical</p>
-                                  </div>
-                                  <div className="min-w-0">
-                                     <p className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 truncate">Destination</p>
-                                     <p className="text-xs md:text-sm font-bold text-slate-900 tracking-tight truncate">{dispatch.hospitalAssigned || 'Institutional Node'}</p>
-                                  </div>
-                                  <div className="min-w-0">
-                                     <p className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 truncate">ETA</p>
-                                     <p className="text-xs md:text-sm font-bold text-slate-900 tracking-tight truncate">{dispatch.eta || 'Calculating...'}</p>
-                                  </div>
-                               </div>
-                            </div>
-                            
-                            <div className="flex flex-row xl:flex-col gap-3 md:gap-4 shrink-0">
-                               <button 
-                                 onClick={() => navigate(`/doctor/patient/${dispatch.patientId}`)}
-                                 className="flex-1 xl:w-48 py-3 md:py-4 bg-slate-50 text-slate-900 rounded-xl md:rounded-2xl font-black text-[9px] md:text-[10px] uppercase tracking-widest border border-slate-100 hover:bg-slate-100 transition-all flex items-center justify-center gap-2 md:gap-3"
-                               >
-                                  <Activity className="w-3 md:w-4 h-3 md:h-4 text-accent-maroon" />
-                                  Link
-                               </button>
-                               <button className="flex-1 xl:w-48 py-3 md:py-4 bg-slate-900 text-white rounded-xl md:rounded-2xl font-black text-[9px] md:text-[10px] uppercase tracking-widest shadow-xl hover:bg-black transition-all flex items-center justify-center gap-2 md:gap-3">
-                                  <Navigation className="w-3 md:w-4 h-3 md:h-4 text-medical-red" />
-                                  Trace
-                               </button>
-                            </div>
-                         </div>
-
-                         <div className="mt-8 md:mt-10 pt-6 md:pt-8 border-t border-slate-50 flex items-center justify-between">
-                            <div className="flex items-center gap-3 md:gap-4">
-                               <div className="flex -space-x-2">
-                                  {[1,2,3].map(i => (
-                                    <div key={i} className="w-5 h-5 md:w-6 md:h-6 rounded-full bg-slate-100 border-2 border-white flex items-center justify-center text-[7px] md:text-[8px] font-bold text-slate-400">R</div>
-                                  ))}
-                               </div>
-                               <span className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest italic truncate hidden sm:inline">Responder Grid Assigned</span>
-                               <span className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest italic sm:hidden">Responders</span>
-                            </div>
-                            <span className="text-[8px] md:text-[9px] font-black text-slate-300 uppercase tracking-widest italic whitespace-nowrap">Sync: 1.2s</span>
-                         </div>
-                      </div>
-                    )) : (
-                      <div className="py-16 md:py-20 text-center bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 border-dashed p-6">
-                         <AlertCircle className="w-10 md:w-12 h-10 md:h-12 text-slate-100 mx-auto mb-4" />
-                         <h3 className="text-lg md:text-xl font-black text-slate-900 italic tracking-tighter">Negative Deployments</h3>
-                         <p className="text-[10px] md:text-xs font-black text-slate-400 uppercase tracking-widest mt-2">Grid readiness: 100%</p>
-                      </div>
-                    )}
-                 </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Active Dispatches */}
+            <div className="lg:col-span-2 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Ambulance className="w-4 h-4 text-accent-maroon" />
+                  <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Active Deployments</h3>
+                </div>
+                <span className="text-[9px] font-black px-2.5 py-1 rounded-lg bg-accent-maroon/10 text-accent-maroon border border-accent-maroon/20">
+                  {activeDispatches.length} Units En Route
+                </span>
               </div>
 
-              {/* RIGHT: Stats & History */}
-              <div className="space-y-8 md:space-y-10">
-                 <div className="bg-slate-900 rounded-[32px] md:rounded-[40px] p-6 md:p-8 text-white relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-6 opacity-10">
-                       <Activity className="w-24 md:w-32 h-24 md:h-32 text-accent-maroon" />
+              <div className="space-y-3">
+                {loading ? (
+                  Array(2).fill(0).map((_, i) => (
+                    <div key={i} className="h-40 bg-[#111827] rounded-2xl animate-pulse border border-white/[0.06]" />
+                  ))
+                ) : activeDispatches.length > 0 ? activeDispatches.map((dispatch) => (
+                  <div key={dispatch.id} className="bg-[#111827] rounded-2xl border border-white/[0.06] p-5 group hover:border-accent-maroon/20 transition-colors">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 bg-slate-800 rounded-xl flex items-center justify-center text-white font-black text-lg border border-white/10">
+                          {dispatch.ambulanceId?.charAt(0) || 'A'}
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-black text-white">Unit {dispatch.ambulanceId || 'Alpha-1'}</h4>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <div className="w-1.5 h-1.5 bg-accent-maroon rounded-full animate-pulse" />
+                            <span className="text-[9px] font-black text-accent-maroon uppercase tracking-widest">
+                              {dispatch.status?.replace('_', ' ') || 'Dispatched'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => navigate(`/doctor/patient/${dispatch.patientId}`)}
+                          className="px-3 py-1.5 bg-[#1E293B] border border-white/5 text-slate-400 text-[9px] font-black rounded-xl hover:border-accent-maroon/20 hover:text-accent-maroon transition-all flex items-center gap-1.5"
+                        >
+                          <Activity className="w-3 h-3" />
+                          View
+                        </button>
+                      </div>
                     </div>
-                    <div className="relative z-10">
-                       <h3 className="text-[9px] md:text-[10px] font-black text-accent-maroon uppercase tracking-widest mb-6 italic">Grid Intelligence</h3>
-                       <div className="space-y-4 md:space-y-6">
-                          <GridStat label="Avg Response" value="4m 20s" />
-                          <GridStat label="Hospital Bed Cap" value="84%" />
-                          <GridStat label="Active Paramedics" value="12" />
-                       </div>
-                    </div>
-                 </div>
 
-                 <div className="bg-white rounded-[32px] md:rounded-[40px] border border-slate-100 shadow-premium p-6 md:p-8 overflow-hidden h-full">
-                    <h3 className="text-xl font-black text-slate-900 tracking-tighter italic mb-6 md:mb-8">Recent Archives</h3>
-                    <div className="space-y-5 md:space-y-6">
-                       {completedDispatches.length > 0 ? completedDispatches.slice(0, 5).map(d => (
-                         <div key={d.id} className="flex items-center justify-between group cursor-pointer" onClick={() => navigate(`/doctor/patient/${d.patientId}`)}>
-                            <div className="flex items-center gap-3 md:gap-4 min-w-0">
-                               <div className="p-2.5 md:p-3 bg-slate-50 text-slate-300 rounded-xl group-hover:bg-slate-900 group-hover:text-white transition-all shrink-0">
-                                  <MapPin className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0">
-                                   <p className="text-sm font-bold text-slate-900 tracking-tight italic truncate">{d.patientName || 'Completed Action'}</p>
-                                   <p className="text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest">{d.dispatchedAt ? new Date(d.dispatchedAt.seconds * 1000).toLocaleDateString() : 'N/A'}</p>
-                                </div>
-                            </div>
-                            <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
-                         </div>
-                       )) : (
-                         <p className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest text-center py-4">No recent archives</p>
-                       )}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[
+                        { label: 'Patient', value: dispatch.patientName || 'Emergency Node' },
+                        { label: 'Impact Level', value: 'Level 1 - Critical', highlight: true },
+                        { label: 'Destination', value: dispatch.hospitalAssigned || 'Nearest Facility' },
+                        { label: 'ETA', value: dispatch.eta || 'Calculating...' },
+                      ].map(item => (
+                        <div key={item.label}>
+                          <p className="text-[8px] font-black text-slate-600 uppercase tracking-wider mb-0.5">{item.label}</p>
+                          <p className={`text-[11px] font-black truncate ${item.highlight ? 'text-accent-maroon' : 'text-white'}`}>{item.value}</p>
+                        </div>
+                      ))}
                     </div>
-                 </div>
+                  </div>
+                )) : (
+                  <div className="py-16 text-center bg-[#111827] rounded-2xl border border-white/[0.06] border-dashed">
+                    <AlertCircle className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                    <h3 className="text-sm font-black text-slate-500">No Active Deployments</h3>
+                    <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest mt-1">Grid readiness: 100%</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right Panel: Intelligence + History */}
+            <div className="space-y-4">
+              {/* Grid Intelligence */}
+              <div className="bg-[#111827] rounded-2xl border border-white/[0.06] p-5">
+                <h3 className="text-[9px] font-black text-accent-maroon uppercase tracking-widest mb-4">Grid Intelligence</h3>
+                <div className="space-y-3 divide-y divide-white/[0.06]">
+                  <GridStat label="Avg Response" value="4m 20s" />
+                  <GridStat label="Hospital Bed Cap" value="84%" />
+                  <GridStat label="Active Paramedics" value="12" />
+                  <GridStat label="Total Dispatches" value={dispatches.length} />
+                </div>
               </div>
 
-           </div>
+              {/* Recent Archives */}
+              <div className="bg-[#111827] rounded-2xl border border-white/[0.06] p-5 overflow-hidden">
+                <h3 className="text-[10px] font-black text-white uppercase tracking-widest mb-4">Recent Archives</h3>
+                <div className="space-y-3">
+                  {completedDispatches.length > 0 ? completedDispatches.slice(0, 5).map(d => (
+                    <div
+                      key={d.id}
+                      className="flex items-center justify-between group cursor-pointer py-1"
+                      onClick={() => navigate(`/doctor/patient/${d.patientId}`)}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-2 bg-white/5 rounded-xl group-hover:bg-accent-maroon/10 transition-colors shrink-0">
+                          <MapPin className="w-3.5 h-3.5 text-slate-500 group-hover:text-accent-maroon transition-colors" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-black text-white truncate">{d.patientName || 'Completed Action'}</p>
+                          <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest">
+                            {d.dispatchedAt ? new Date(d.dispatchedAt.seconds * 1000).toLocaleDateString() : 'N/A'}
+                          </p>
+                        </div>
+                      </div>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                    </div>
+                  )) : (
+                    <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest text-center py-4">No recent archives</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>
   );
 };
-
-const GridStat = ({ label, value }: any) => (
-  <div className="flex justify-between items-center">
-     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</span>
-     <span className="text-xl font-black italic">{value}</span>
-  </div>
-);
-
-const PlusIcon = (props: any) => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <line x1="12" y1="5" x2="12" y2="19" />
-    <line x1="5" y1="12" x2="19" y2="12" />
-  </svg>
-);
 
 export default DoctorEmergency;

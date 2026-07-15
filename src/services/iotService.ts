@@ -75,22 +75,16 @@ export const startIoTSimulation = (patientId: string) => {
 
     // 3. Simulate Ambulance Movement if dispatched
     const ambRef = ref(rtdb, `ambulanceTracking/${patientId}`);
-    onValue(ref(rtdb, `ambulanceTracking/${patientId}`), (snap) => {
-      // Just check if the node exists to decide if we should update it
-    }, { onlyOnce: true });
-
-    // Actually we'll look at firestore for dispatch state
-    // But since this is a simulation, we'll just check if it's emergency time
     if (metrics.isEmergency) {
-        // Move ambulance closer to patient location
-        const step = 0.0005;
-        if (Math.abs(ambulanceLocation[0] - patientLocation[0]) > step) {
-            ambulanceLocation[0] += ambulanceLocation[0] < patientLocation[0] ? step : -step;
-        }
-        if (Math.abs(ambulanceLocation[1] - patientLocation[1]) > step) {
-            ambulanceLocation[1] += ambulanceLocation[1] < patientLocation[1] ? step : -step;
-        }
-        set(ambRef, { lat: ambulanceLocation[0], lng: ambulanceLocation[1], updatedAt: Date.now() });
+      // Move ambulance closer to patient location
+      const step = 0.0005;
+      if (Math.abs(ambulanceLocation[0] - patientLocation[0]) > step) {
+          ambulanceLocation[0] += ambulanceLocation[0] < patientLocation[0] ? step : -step;
+      }
+      if (Math.abs(ambulanceLocation[1] - patientLocation[1]) > step) {
+          ambulanceLocation[1] += ambulanceLocation[1] < patientLocation[1] ? step : -step;
+      }
+      set(ambRef, { lat: ambulanceLocation[0], lng: ambulanceLocation[1], updatedAt: Date.now() });
     }
 
     // Update the Patient's main record for queue sorting

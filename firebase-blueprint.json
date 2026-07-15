@@ -54,7 +54,7 @@
     },
     "doctors": {
       "title": "Doctor Details",
-      "description": "Specific information for doctor users.",
+      "description": "Medical professionals registered in the system — includes identity, credentials, availability, and registry lookup fields.",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -62,12 +62,22 @@
         "email": { "type": "string" },
         "phoneNumber": { "type": "string" },
         "hospitalName": { "type": "string" },
+        "hospitalSlug": { "type": "string" },
         "specialization": { "type": "string" },
         "registrationNumber": { "type": "string" },
+        "medicalLicenseId": { "type": "string" },
+        "experience": { "type": "string" },
+        "consultationFee": { "type": "string" },
+        "rating": { "type": "number" },
+        "availability": { "type": "string" },
+        "emergencySupport": { "type": "boolean" },
+        "location": { "type": "object" },
+        "photoURL": { "type": "string" },
         "verified": { "type": "boolean" },
         "status": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
-      }
+      },
+      "required": ["fullName", "specialization"]
     },
     "patientAssessments": {
       "title": "Patient Health Assessment",
@@ -80,24 +90,6 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "questions", "answers"]
-    },
-    "doctors": {
-      "title": "Doctors",
-      "description": "Medical professionals registered in the system.",
-      "type": "object",
-      "properties": {
-        "fullName": { "type": "string" },
-        "specialization": { "type": "string" },
-        "experience": { "type": "string" },
-        "hospitalSlug": { "type": "string" },
-        "consultationFee": { "type": "string" },
-        "rating": { "type": "number" },
-        "availability": { "type": "string" },
-        "photoURL": { "type": "string" },
-        "emergencySupport": { "type": "boolean" },
-        "location": { "type": "object" }
-      },
-      "required": ["fullName", "specialization"]
     },
     "hospitals": {
       "title": "Hospitals",

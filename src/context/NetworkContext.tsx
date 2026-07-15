@@ -109,6 +109,25 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         console.error('[NetworkContext] WebSocket connection error:', error);
         // let onclose handle reconnection to avoid duplicate calls
       };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'telemetry_validated') {
+            // Dispatch with the full payload as detail so consumers can read detail.patientId and detail.data
+            const customEvent = new CustomEvent('heartsync-telemetry', {
+              detail: {
+                patientId: payload.patientId || payload.data?.patientId,
+                data: payload.data || payload,
+                raw: payload,
+              }
+            });
+            window.dispatchEvent(customEvent);
+          }
+        } catch (err) {
+          console.error('[NetworkContext] Error parsing WebSocket message:', err);
+        }
+      };
     } catch (err) {
       console.error('[NetworkContext] Gracefully handled WebSocket creation crash:', err);
       setIsWsConnected(false);

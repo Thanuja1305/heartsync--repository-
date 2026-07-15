@@ -30,7 +30,7 @@ const PatientDashboard = () => {
   const location = useLocation();
   const userId = user?.id || user?.uid || '';
 
-  const { vitals: realVitals, loading: vitalsLoading, error: vitalsError } = usePatientVitals(userId);
+  const { vitals: realVitals, loading: vitalsLoading, error: vitalsError, isDeviceOnline } = usePatientVitals(userId);
 
   const [vitals, setVitals] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
@@ -89,16 +89,26 @@ const PatientDashboard = () => {
       alertLevel: realVitals.alertLevel,
       current_condition: realVitals.current_condition,
       ecg: realVitals.ecg,
+      fingerDetected: realVitals.fingerDetected,
+      leadsOff: realVitals.leadsOff,
     };
     setVitals(formatted);
+
+    // Sync to Firestore for doctor views, suppressing if finger is off
+    const finger = realVitals.fingerDetected !== false && Number(realVitals.bpm) > 0 && Number(realVitals.spo2) > 0;
     setDoc(doc(db, 'liveHealthMetrics', userId), {
-      heartRate: realVitals.bpm, o2: realVitals.spo2, temp: realVitals.temperature,
-      status: realVitals.alertLevel === 3 ? 'Critical' : realVitals.alertLevel === 2 ? 'Warning' : 'Optimal',
-      timestamp: new Date().toISOString(), isEmergency: realVitals.alertLevel === 3,
+      heartRate: finger ? Number(realVitals.bpm) : 0, 
+      o2: finger ? Number(realVitals.spo2) : 0, 
+      temp: Number(realVitals.temperature),
+      status: finger ? (realVitals.alertLevel === 3 ? 'Critical' : realVitals.alertLevel === 2 ? 'Warning' : 'Optimal') : 'Optimal',
+      timestamp: new Date().toISOString(), 
+      isEmergency: finger ? realVitals.alertLevel === 3 : false,
+      fingerDetected: realVitals.fingerDetected,
+      leadsOff: realVitals.leadsOff,
     }, { merge: true }).catch(console.error);
   }, [userId, realVitals]);
 
-  const isConnected = !!(vitals && vitals.heartRate > 0 && !vitalsError);
+  const isConnected = isSimulating || (isDeviceOnline && vitals && !vitalsError);
 
   // Get patient name: prioritize Firestore data (most accurate), then profile, then email-based fallback
   const rawName = patientData?.fullName 
@@ -221,10 +231,18 @@ const PatientDashboard = () => {
               </div>
               <div>
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Heart Rate</p>
-                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
-                  {isConnected && vitals?.heartRate ? vitals.heartRate : '--'}
-                  <span className="text-xs font-bold text-slate-400 ml-1">BPM</span>
-                </p>
+                <div className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected ? (
+                    vitals?.fingerDetected !== false ? (
+                      <>
+                        {vitals?.heartRate || '--'}
+                        <span className="text-xs font-bold text-slate-400 ml-1">BPM</span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-400">Place finger</span>
+                    )
+                  ) : '--'}
+                </div>
                 <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded mt-1 inline-block">Live Reading</span>
               </div>
             </motion.div>
@@ -237,10 +255,18 @@ const PatientDashboard = () => {
               </div>
               <div>
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">SpO₂</p>
-                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
-                  {isConnected && vitals?.o2 ? vitals.o2 : '--'}
-                  <span className="text-xs font-bold text-slate-400 ml-0.5">%</span>
-                </p>
+                <div className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected ? (
+                    vitals?.fingerDetected !== false ? (
+                      <>
+                        {vitals?.o2 || '--'}
+                        <span className="text-xs font-bold text-slate-400 ml-0.5">%</span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-400">Place finger</span>
+                    )
+                  ) : '--'}
+                </div>
                 <span className="text-[8px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mt-1 inline-block">Oxygen Saturation</span>
               </div>
             </motion.div>
@@ -253,10 +279,18 @@ const PatientDashboard = () => {
               </div>
               <div>
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Temperature</p>
-                <p className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
-                  {isConnected && vitals?.temp != null ? Number(vitals.temp).toFixed(1) : '--'}
-                  <span className="text-xs font-bold text-slate-400 ml-0.5">°C</span>
-                </p>
+                <div className="text-2xl font-black text-dark-navy leading-tight mt-0.5">
+                  {isConnected ? (
+                    vitals?.temp != null && vitals.temp > 0 ? (
+                      <>
+                        {Number(vitals.temp).toFixed(1)}
+                        <span className="text-xs font-bold text-slate-400 ml-0.5">°C</span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-400">No reading</span>
+                    )
+                  ) : '--'}
+                </div>
                 <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-1 inline-block">Body Temperature</span>
               </div>
             </motion.div>
@@ -302,7 +336,7 @@ const PatientDashboard = () => {
 
               <div className="flex-1 bg-[#0a0a0a] rounded-xl overflow-hidden relative border border-[#222]">
                 {isConnected ? (
-                  <ECGGraph bpm={vitals?.heartRate || 0} liveEcg={vitals?.ecg || []} spo2={vitals?.o2 || 0} classification={vitals?.current_condition} />
+                  <ECGGraph bpm={vitals?.heartRate || 0} liveEcg={vitals?.ecg || []} spo2={vitals?.o2 || 0} classification={vitals?.current_condition} leadsOff={vitals?.leadsOff} />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
                     <div className="w-14 h-14 mb-4 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">

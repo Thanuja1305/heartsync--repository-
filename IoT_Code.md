@@ -421,6 +421,7 @@ void sendTelemetry() {
 
   int bpm  = 0;
   int spo2 = 0;
+  bool fingerDetected = false;
 
   // Read MAX30102 only if connected, with a low timeout to prevent blocking the WebSocket event loop
   if (max30102Connected) {
@@ -436,13 +437,18 @@ void sendTelemetry() {
       particleSensor.nextSample();
     }
 
-    maxim_heart_rate_and_oxygen_saturation(
-      irBuffer, MAX_BUFFER_SIZE, redBuffer,
-      &spo2Value, &validSPO2, &heartRateValue, &validHeartRate
-    );
+    // A finger is placed on the sensor if the IR amplitude is above 50,000
+    fingerDetected = (irBuffer[MAX_BUFFER_SIZE - 1] > 50000UL);
 
-    bpm  = (validHeartRate == 1 && heartRateValue > 15 && heartRateValue < 250) ? (int)heartRateValue : 0;
-    spo2 = (validSPO2 == 1      && spo2Value > 70 && spo2Value <= 100)           ? (int)spo2Value     : 0;
+    if (fingerDetected) {
+      maxim_heart_rate_and_oxygen_saturation(
+        irBuffer, MAX_BUFFER_SIZE, redBuffer,
+        &spo2Value, &validSPO2, &heartRateValue, &validHeartRate
+      );
+
+      bpm  = (validHeartRate == 1 && heartRateValue > 15 && heartRateValue < 250) ? (int)heartRateValue : 0;
+      spo2 = (validSPO2 == 1      && spo2Value > 70 && spo2Value <= 100)           ? (int)spo2Value     : 0;
+    }
   }
 
   // Leads-off check
@@ -506,6 +512,8 @@ void sendTelemetry() {
   doc["humidity"]     = round(humidity);
   doc["timestamp"]    = (uint64_t)millis();               // Relative ms — server uses Date.now() too
   doc["recoveryNote"] = recoveryNote;                     // Escalation engine uses this
+  doc["fingerDetected"] = fingerDetected;
+  doc["leadsOff"]       = leadsOff;
 
   JsonArray ecgArr = doc.createNestedArray("ecg");
   for (int i = 0; i < ECG_BUFFER_SIZE; i++) {

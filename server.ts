@@ -576,22 +576,38 @@ async function startServer() {
         }
 
         if (payload.type === "telemetry") {
-          const { patientId, bpm, spo2, temperature, humidity, ecg } = payload;
+          const { patientId, bpm, spo2, temperature, humidity, ecg, fingerDetected: rawFinger, leadsOff: rawLeads } = payload;
           if (!patientId) return;
 
           associatedPatientId = patientId;
 
-          // 1. SENSOR VALIDATION LAYER (Physiological boundary validation)
           const hr = Number(bpm ?? 0);
           const o2 = Number(spo2 ?? 0);
           const temp = Number(temperature ?? 0);
           const humid = Number(humidity ?? 0);
 
-          if (hr < 20 || hr > 220 || o2 < 70 || o2 > 100 || temp < 30 || temp > 45 || humid < 0 || humid > 100) {
-            console.warn(`[VALIDATION FLAGGED] Anomalous/Impossible reading from patient ${patientId}: HR=${hr}, SpO2=${o2}, Temp=${temp}, Humid=${humid}`);
+          const fingerDetected = rawFinger === true || (hr > 0 && o2 > 0);
+          const leadsOff = rawLeads === true;
+
+          // 1. SENSOR VALIDATION LAYER (Physiological boundary validation)
+          // If finger is detected, validate heart rate and spo2 ranges. If not, bypass to avoid rejecting 'no reading' packets.
+          if (fingerDetected) {
+            if (hr < 20 || hr > 220 || o2 < 70 || o2 > 100) {
+              console.warn(`[VALIDATION FLAGGED] Anomalous/Impossible reading from patient ${patientId}: HR=${hr}, SpO2=${o2}`);
+              ws.send(JSON.stringify({ 
+                type: "error", 
+                message: "Telemetry rejected: physiological parameters out of safe bounds." 
+              }));
+              return;
+            }
+          }
+
+          // Validate temp and humidity as they do not depend on finger placement
+          if (temp < 30 || temp > 45 || humid < 0 || humid > 100) {
+            console.warn(`[VALIDATION FLAGGED] Anomalous/Impossible temp/humidity from patient ${patientId}: Temp=${temp}, Humid=${humid}`);
             ws.send(JSON.stringify({ 
               type: "error", 
-              message: "Telemetry rejected: physiological parameters out of safe bounds (possible artifact / loose lead)." 
+              message: "Telemetry rejected: temp/humidity parameters out of safe bounds." 
             }));
             return;
           }
@@ -614,7 +630,11 @@ async function startServer() {
           const classification = classifyECGRhythm(features, o2);
 
           // Determine raw risk level based on thresholds (Stage 2: Risk Detection)
-          let rawAlertLevel = (o2 < 90 || hr > 130 || hr < 45) ? 3 : (temp > 38 || o2 < 95) ? 2 : 1;
+          // If finger is NOT detected, do NOT trigger any hypoxemia or bradycardia alerts.
+          let rawAlertLevel = 1;
+          if (fingerDetected) {
+            rawAlertLevel = (o2 < 90 || hr > 130 || hr < 45) ? 3 : (temp > 38 || o2 < 95) ? 2 : 1;
+          }
           
           // Stage 1: Signal quality check. If bad: Do nothing (force normal to prevent false alarms)
           if (quality.rating === 'Poor') {
@@ -662,7 +682,9 @@ async function startServer() {
             alertReason,
             classification: classification.prediction,
             confidence: classification.confidenceScore,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            fingerDetected,
+            leadsOff
           };
 
           await supabase.from('vitals').insert([{
@@ -691,13 +713,24 @@ async function startServer() {
             }
           }
 
-          // Return validated & annotated package back down ws channel
-          ws.send(JSON.stringify({
+          // Return validated & annotated package back down ws channel and broadcast to all dashboards
+          const validatedMsg = JSON.stringify({
             type: "telemetry_validated",
+            patientId,
             data: liveValue,
             classification,
             quality
-          }));
+          });
+
+          // Send back to ESP32 source
+          ws.send(validatedMsg);
+
+          // Broadcast immediately to all connected clients (like frontend dashboards)
+          wss.clients.forEach((client) => {
+            if (client.readyState === 1) { // WebSocket.OPEN
+              client.send(validatedMsg);
+            }
+          });
         }
       } catch (err) {
         console.error("[WEBSOCKET DISPATCH ERROR]:", err);
