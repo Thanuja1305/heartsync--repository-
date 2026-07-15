@@ -84,104 +84,113 @@ async function startServer() {
   });
 
 
-  // API ROUTE: Receive IoT Vitals from Arduino
+  // API ROUTE: Receive IoT Vitals from Arduino / ESP32 IoT Devices
+  // Architecture: Firebase RTDB = real-time streaming (always succeeds).
+  //               Supabase = historical persistence (requires a valid registered patient UUID).
   app.post("/api/vitals", async (req, res) => {
     try {
       const { patientId, heartRate, spo2, temperature, ecg } = req.body;
-      if (!patientId || !heartRate || !spo2 || !temperature) {
+      if (!patientId || heartRate === undefined || spo2 === undefined || temperature === undefined) {
         return res.status(400).json({ error: "Missing required vitals data" });
       }
-      
-      const is_emergency = heartRate > 120 || heartRate < 45 || spo2 < 90;
 
-      const { error } = await supabase.from('vitals').insert([{
-        patient_id: patientId,
-        heart_rate: heartRate,
-        spo2: spo2,
-        temperature: temperature,
-        ecg: ecg || [],
-        is_emergency: is_emergency
-      }]);
+      const hr = Number(heartRate);
+      const o2 = Number(spo2);
+      const temp = Number(temperature);
+      const is_emergency = hr > 120 || hr < 45 || o2 < 90;
 
-      if (error) throw error;
+      // --- PRIORITY 1: Firebase RTDB (Real-Time Streaming — always runs, non-blocking) ---
+      const liveReadingPayload = {
+        bpm: hr,
+        heartRate: hr,
+        spo2: o2,
+        temperature: temp,
+        humidity: 55,
+        ecg: Array.isArray(ecg) ? ecg : [512],
+        status: is_emergency ? "Critical" : "Normal",
+        alertLevel: is_emergency ? 3 : 1,
+        alertReason: is_emergency ? "Critical Vitals" : "Optimal",
+        timestamp: Date.now(),
+        fingerDetected: true,
+        leadsOff: false
+      };
 
-      // Write to Firebase Realtime Database
       if (rtdb) {
-        const liveReadingPayload = {
-          bpm: heartRate,
-          heartRate: heartRate,
-          spo2: spo2,
-          temperature: temperature,
-          humidity: 55,
-          ecg: ecg || [512],
-          status: is_emergency ? "Critical" : "Normal",
-          alertLevel: is_emergency ? 3 : 1,
-          alertReason: is_emergency ? "Critical Vitals" : "Optimal",
-          timestamp: Date.now(),
-          fingerDetected: true,
-          leadsOff: false
-        };
-        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("REST RTDB liveReading error:", e));
-        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("REST RTDB livereading error:", e));
-        rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("REST RTDB liveHealthMetrics error:", e));
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("[RTDB] liveReading error:", e));
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("[RTDB] livereading error:", e));
+        rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("[RTDB] liveHealthMetrics error:", e));
       }
 
-      // Write to Firebase Firestore
       if (firestore) {
-        const firestoreVitals = {
-          heartRate: heartRate,
-          o2: spo2,
-          temp: temperature,
+        fsSetDoc(fsDoc(firestore, 'liveHealthMetrics', patientId), {
+          heartRate: hr, o2, temp,
           status: is_emergency ? "Critical" : "Optimal",
           timestamp: new Date().toISOString(),
           isEmergency: is_emergency,
           fingerDetected: true,
           leadsOff: false
-        };
-        fsSetDoc(fsDoc(firestore, 'liveHealthMetrics', patientId), firestoreVitals, { merge: true })
-          .catch(e => console.error("REST Firestore liveHealthMetrics error:", e));
+        }, { merge: true }).catch(e => console.error("[Firestore] liveHealthMetrics error:", e));
       }
-      
-      if (is_emergency) {
+
+      // --- PRIORITY 2: Supabase PostgreSQL (Historical Persistence — only if patientId is a valid registered UUID) ---
+      // IoT devices (ESP32) may send non-UUID IDs like "P001". We resolve the real patient UUID first.
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedPatientUUID: string | null = null;
+
+      if (UUID_REGEX.test(patientId)) {
+        // patientId looks like a UUID — verify it exists in patients table
+        const { data: patientRow } = await supabase.from('patients').select('id').eq('id', patientId).maybeSingle();
+        if (patientRow) resolvedPatientUUID = patientRow.id;
+      } else {
+        // Try to resolve by device_id in devices table (ESP32 may send its device label as patient_id)
+        const { data: deviceRow } = await supabase.from('devices').select('patient_id').eq('device_id', patientId).maybeSingle();
+        if (deviceRow?.patient_id) resolvedPatientUUID = deviceRow.patient_id;
+      }
+
+      if (resolvedPatientUUID) {
+        // Insert into vitals (only schema-compliant columns)
+        const { error: vitalsError } = await supabase.from('vitals').insert([{
+          patient_id: resolvedPatientUUID,
+          heart_rate: hr,
+          spo2: o2,
+          temperature: temp
+        }]);
+        if (vitalsError) console.error("[Supabase] vitals insert error:", vitalsError);
+
+        // Insert critical alerts
+        if (is_emergency) {
           const { data: alertData } = await supabase.from('alerts').insert([{
-              patient_id: patientId,
-              severity: 'CRITICAL',
-              message: `Critical vitals detected: HR ${heartRate}, SpO2 ${spo2}`
+            patient_id: resolvedPatientUUID,
+            alert_type: 'vitals_critical',
+            severity: 'emergency',
+            message: `Critical vitals detected: HR ${hr}, SpO2 ${o2}%`
           }]).select();
 
           if (firestore) {
-            const emergencyPayload = {
-              patientId,
-              emergency: true,
-              severity: "CRITICAL",
-              detectedAt: Date.now(),
-              status: "PENDING_DOCTOR_VERIFICATION",
-              patientName: "Patient " + patientId.substring(0, 5),
-              vitalsAtTrigger: {
-                heartRate: heartRate,
-                spo2: spo2,
-                temp: temperature
-              },
-              verifiedBy: null,
-              verifiedAt: null
-            };
-            fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), emergencyPayload, { merge: true })
-              .catch(e => console.error("REST Firestore emergencyAlerts error:", e));
+            fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), {
+              patientId, emergency: true, severity: "CRITICAL",
+              detectedAt: Date.now(), status: "PENDING_DOCTOR_VERIFICATION",
+              vitalsAtTrigger: { heartRate: hr, spo2: o2, temp },
+              verifiedBy: null, verifiedAt: null
+            }, { merge: true }).catch(e => console.error("[Firestore] emergencyAlerts error:", e));
           }
-          
+
           if (alertData && alertData[0]) {
-             checkEmergencyCondition(supabase, alertData[0], {
-                heart_rate: heartRate,
-                spo2: spo2,
-                temperature: temperature
-             }, 'Excellent').catch(e => console.error('Emergency dispatch failed:', e));
+            checkEmergencyCondition(supabase, alertData[0], {
+              heart_rate: hr, spo2: o2, temperature: temp
+            }, 'Excellent').catch(e => console.error('[EmergencyService] dispatch failed:', e));
           }
+        }
+      } else {
+        // Patient UUID not registered in DB — Firebase streaming still works.
+        // This is normal for unregistered ESP32 devices or plain string IDs like "P001".
+        console.warn(`[/api/vitals] Patient "${patientId}" not found in DB. Skipping Supabase write. Live data streaming to Firebase continues.`);
       }
-      
-      res.json({ success: true, message: "Vitals recorded" });
+
+      res.json({ success: true, message: "Vitals received and streamed" });
     } catch (error: any) {
       console.error("[ARDUINO API ERROR]:", error);
-      res.status(500).json({ error: "Failed to record vitals" });
+      res.status(500).json({ error: "Failed to process vitals" });
     }
   });
   // TWILIO UTILS
@@ -558,7 +567,8 @@ async function startServer() {
       if (analysisResult.status === 'EMERGENCY') {
         const { data: alertData } = await supabase.from('alerts').insert([{
           patient_id: userId,
-          severity: 'CRITICAL',
+          alert_type: 'ai_emergency',
+          severity: 'emergency',
           message: analysisResult.reasoning
         }]).select();
 
@@ -584,7 +594,8 @@ async function startServer() {
         if (analysisResult.status === 'EMERGENCY') {
           const { data: alertData } = await supabase.from('alerts').insert([{
             patient_id: userId,
-            severity: 'CRITICAL',
+            alert_type: 'ai_emergency',
+            severity: 'emergency',
             message: analysisResult.reasoning
           }]).select();
 
@@ -770,16 +781,32 @@ async function startServer() {
             leadsOff
           };
 
-          await supabase.from('vitals').insert([{
-            patient_id: patientId,
-            heart_rate: hr,
-            spo2: o2,
-            temperature: temp,
-            ecg: finalEcg,
-            is_emergency: alertLevel === 3
-          }]);
+          // 3. SUPABASE PERSISTENCE — Resolve patient UUID first (non-fatal if not registered)
+          const WS_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          let wsPatientUUID: string | null = null;
+
+          if (WS_UUID_REGEX.test(patientId)) {
+            const { data: pRow } = await supabase.from('patients').select('id').eq('id', patientId).maybeSingle();
+            if (pRow) wsPatientUUID = pRow.id;
+          } else {
+            const { data: dRow } = await supabase.from('devices').select('patient_id').eq('device_id', patientId).maybeSingle();
+            if (dRow?.patient_id) wsPatientUUID = dRow.patient_id;
+          }
+
+          if (wsPatientUUID) {
+            const { error: vErr } = await supabase.from('vitals').insert([{
+              patient_id: wsPatientUUID,
+              heart_rate: hr,
+              spo2: o2,
+              temperature: temp
+            }]);
+            if (vErr) console.error("[WS][Supabase] vitals insert error:", vErr);
+          } else {
+            console.warn(`[WS] Patient "${patientId}" not in DB — skipping Supabase vitals write. Firebase streaming active.`);
+          }
 
           // Write to Firebase Realtime Database
+
           if (rtdb) {
             const liveReadingPayload = {
               bpm: hr,
@@ -820,38 +847,31 @@ async function startServer() {
 
           // Log trauma warnings if emergency is active
           if (alertLevel === 3) {
-            const { data: alertData } = await supabase.from('alerts').insert([{
-              patient_id: patientId,
-              severity: 'CRITICAL',
-              message: `CRITICAL ALERT: HR=${hr}, SpO2=${o2}`
-            }]).select();
-
+            // Firestore emergency alert (uses patientId as document key — always safe)
             if (firestore) {
-              const emergencyPayload = {
-                patientId,
-                emergency: true,
-                severity: "CRITICAL",
-                detectedAt: Date.now(),
-                status: "PENDING_DOCTOR_VERIFICATION",
+              fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), {
+                patientId, emergency: true, severity: "CRITICAL",
+                detectedAt: Date.now(), status: "PENDING_DOCTOR_VERIFICATION",
                 patientName: "Patient " + patientId.substring(0, 5),
-                vitalsAtTrigger: {
-                  heartRate: hr,
-                  spo2: o2,
-                  temp: temp
-                },
-                verifiedBy: null,
-                verifiedAt: null
-              };
-              fsSetDoc(fsDoc(firestore, 'emergencyAlerts', patientId), emergencyPayload, { merge: true })
-                .catch(e => console.error("Firestore emergencyAlerts error:", e));
+                vitalsAtTrigger: { heartRate: hr, spo2: o2, temp },
+                verifiedBy: null, verifiedAt: null
+              }, { merge: true }).catch(e => console.error("Firestore emergencyAlerts error:", e));
             }
 
-            if (alertData && alertData[0]) {
-              checkEmergencyCondition(supabase, alertData[0], {
-                heart_rate: hr,
-                spo2: o2,
-                temperature: temp
-              }, quality.rating).catch(e => console.error('Emergency dispatch failed:', e));
+            // Supabase alert (only if patient UUID is resolved)
+            if (wsPatientUUID) {
+              const { data: alertData } = await supabase.from('alerts').insert([{
+                patient_id: wsPatientUUID,
+                alert_type: 'vitals_critical',
+                severity: 'emergency',
+                message: `CRITICAL ALERT: HR=${hr}, SpO2=${o2}`
+              }]).select();
+
+              if (alertData && alertData[0]) {
+                checkEmergencyCondition(supabase, alertData[0], {
+                  heart_rate: hr, spo2: o2, temperature: temp
+                }, quality.rating).catch(e => console.error('Emergency dispatch failed:', e));
+              }
             }
           }
 
