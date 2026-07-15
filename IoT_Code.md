@@ -248,6 +248,7 @@ const char* PATIENT_ID    = "P001";          // Must match patient's UID in Fire
 WebSocketsClient webSocket;
 bool isRegistered = false;
 bool wsConnected  = false;
+bool max30102Connected = false;
 
 DHT dht(DHT_PIN, DHT_TYPE);
 MAX30105 particleSensor;
@@ -418,26 +419,31 @@ void sendTelemetry() {
   if (isnan(temperature) || temperature < 0 || temperature > 50) temperature = 0;
   if (isnan(humidity)    || humidity < 0 || humidity > 100)       humidity = 55;
 
-  // Read MAX30102 — collect fresh samples
-  for (int i = 0; i < MAX_BUFFER_SIZE; i++) {
-    // Block until a fresh sample is available (non-blocking with timeout)
-    unsigned long t0 = millis();
-    while (!particleSensor.available()) {
-      particleSensor.check();
-      if (millis() - t0 > 100) break; // 100ms timeout per sample
+  int bpm  = 0;
+  int spo2 = 0;
+
+  // Read MAX30102 only if connected, with a low timeout to prevent blocking the WebSocket event loop
+  if (max30102Connected) {
+    for (int i = 0; i < MAX_BUFFER_SIZE; i++) {
+      // Block until a fresh sample is available (non-blocking with short timeout)
+      unsigned long t0 = millis();
+      while (!particleSensor.available()) {
+        particleSensor.check();
+        if (millis() - t0 > 5) break; // 5ms timeout per sample to prevent blocking WebSocket client
+      }
+      redBuffer[i] = particleSensor.getRed();
+      irBuffer[i]  = particleSensor.getIR();
+      particleSensor.nextSample();
     }
-    redBuffer[i] = particleSensor.getRed();
-    irBuffer[i]  = particleSensor.getIR();
-    particleSensor.nextSample();
+
+    maxim_heart_rate_and_oxygen_saturation(
+      irBuffer, MAX_BUFFER_SIZE, redBuffer,
+      &spo2Value, &validSPO2, &heartRateValue, &validHeartRate
+    );
+
+    bpm  = (validHeartRate == 1 && heartRateValue > 15 && heartRateValue < 250) ? (int)heartRateValue : 0;
+    spo2 = (validSPO2 == 1      && spo2Value > 70 && spo2Value <= 100)           ? (int)spo2Value     : 0;
   }
-
-  maxim_heart_rate_and_oxygen_saturation(
-    irBuffer, MAX_BUFFER_SIZE, redBuffer,
-    &spo2Value, &validSPO2, &heartRateValue, &validHeartRate
-  );
-
-  int bpm  = (validHeartRate == 1 && heartRateValue > 15 && heartRateValue < 250) ? (int)heartRateValue : 0;
-  int spo2 = (validSPO2 == 1      && spo2Value > 70 && spo2Value <= 100)           ? (int)spo2Value     : 0;
 
   // Leads-off check
   bool leadsOff = (digitalRead(LO_PLUS_PIN) == HIGH) || (digitalRead(LO_MINUS_PIN) == HIGH);
@@ -569,6 +575,7 @@ void setup() {
     Serial.println("[MAX30102] ❌ Sensor not found! Check SDA(21)/SCL(22) wiring.");
     // Continue without — server will receive spo2=0 and not alarm on it
   } else {
+    max30102Connected = true;
     // Optimized settings for accurate HR and SpO2 with MH-ET LIVE MAX30102
     byte ledBrightness = 60;   // 0=Off to 255=50mA. 60 ≈ 12mA, good for most fingers
     byte sampleAverage = 4;    // 1, 2, 4, 8, 16, 32
