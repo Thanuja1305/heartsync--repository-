@@ -101,7 +101,14 @@ HeartSync runs a hybrid dual-backend architecture combining a legacy Firebase la
 - **`incident_logs` table:** Tracks current emergency incidents and enforces state machine transitions ('PENDING_USER', 'RESOLVED', 'ESCALATED_TO_DOCTOR', 'EMERGENCY_DISPATCHED').
 - **Supabase Realtime Broadcasts:** Pushes real-time dashboard events and doctor escalation alerts over WebSockets directly to the web client.
 
+#### 4. Robust Ingestion & Patient UUID Resolution (ESP32 Integration)
+To enable seamless integration with physical microcontrollers while preserving database relational integrity:
+- **Raw ID Support:** ESP32 devices often transmit simplified string identifiers (e.g., `"P001"` or a device MAC address). However, Supabase enforces foreign-key constraints requiring a `UUID` referencing the `patients` table.
+- **Dynamic Lookup:** The Express ingestion engine queries the `patients` or `devices` database tables dynamically to translate incoming hardware IDs into their associated user UUIDs before executing inserts into `vitals` or `alerts`.
+- **Fault Tolerance:** If a device is not yet registered (i.e. lookup returns null), the server outputs a warning but avoids throwing a database error. The live data stream continues to write to Firebase Realtime Database and Firestore, preventing data loss and device crashes while enabling live patient portal tracking.
+
 ---
+
 
 ## 3. Technology Stack
 
@@ -649,6 +656,25 @@ npm run build     # Builds React frontend (Vite) + bundles server.ts (esbuild â†
 npm start         # Runs the production bundle via node dist/server.cjs
 ```
 
+### GitHub Repository & Deployment Details
+* **Repository Name:** `heartsync--repository-`
+* **Repository URL:** `https://github.com/Thanuja1305/heartsync--repository-.git`
+* **Branch:** `main`
+
+### Deployment Steps (e.g., Render, Heroku, or Fly.io)
+1. **Link GitHub Repository**: Connect the repository `heartsync--repository-` to your hosting dashboard.
+2. **Build Settings**:
+   * **Build Command**: `npm install && npm run build`
+   * **Start Command**: `npm start`
+3. **Environment Variables**: Make sure to define the following secrets in your hosting dashboard's Env Settings:
+   * `NODE_ENV=production`
+   * `PORT=3000` (or leave blank if the hosting platform assigns one automatically via process.env.PORT)
+   * `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, etc. (all values from your `.env`)
+   * `VITE_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (ensure you use the service role key so writes bypass RLS restrictions)
+   * `GEMINI_API_KEY` (for AI features)
+   * `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, etc. (for Twilio integration)
+4. **WebSocket URL Configuration**: Ensure your frontend points to the correct domain of your deployed application for WebSocket connections.
+
 ### Database Migrations
 Apply migrations in order using the Supabase CLI:
 ```bash
@@ -664,3 +690,4 @@ Migrations live in `supabase/migrations/` and must be applied in chronological o
 ---
 
 *HeartSync is engineered to production-grade life-critical standards. Every component follows Clean Architecture, separation of concerns, and zero-trust security principles.*
+
