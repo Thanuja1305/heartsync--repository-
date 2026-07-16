@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { get as rtdbGet, ref as rtdbRef } from "firebase/database";
 import {
   sendSMS,
   sendWhatsAppMessage,
@@ -41,7 +42,8 @@ export async function checkEmergencyCondition(
     spo2: number;
     temperature: number;
   },
-  signalQualityRating: string
+  signalQualityRating: string,
+  rtdbClient?: any
 ) {
   console.log(`[Emergency Decision] Evaluating alert for patient ${alert.patient_id}. Severity: ${alert.severity}, Signal Quality: ${signalQualityRating}`);
 
@@ -84,12 +86,29 @@ export async function checkEmergencyCondition(
     const profileData = (patientRecord as any)?.profiles || {};
     const patientUuid = patientRecord ? (patientRecord as any).id : alert.patient_id;
 
+    let latitude: number | undefined = undefined;
+    let longitude: number | undefined = undefined;
+    if (rtdbClient) {
+       try {
+         const locSnap = await rtdbGet(rtdbRef(rtdbClient, `/patientLocations/${patientUuid}`));
+         if (locSnap.exists()) {
+           const locData = locSnap.val();
+           latitude = locData.latitude;
+           longitude = locData.longitude;
+         }
+       } catch(e) {
+         console.warn("[Emergency Decision] Could not fetch location from RTDB:", e);
+       }
+    }
+
     const patientDetails: PatientDetails = {
       name: profileData.full_name || 'HeartSync Patient',
       age: calculateAge(patientRecord ? (patientRecord as any).date_of_birth : null),
       gender: patientRecord ? (patientRecord as any).gender : 'Not specified',
       bloodGroup: patientRecord ? (patientRecord as any).blood_group : 'Not specified',
-      location: 'Hyderabad Hub (Live Tracked Zone)',
+      location: (latitude && longitude) ? `GPS Acquired` : 'Hyderabad Hub (Live Tracked Zone)',
+      latitude,
+      longitude,
       medicalNotes: patientRecord ? (patientRecord as any).medical_notes : 'No clinical alerts configured'
     };
 

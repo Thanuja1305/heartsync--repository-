@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 
 const AIAssessment = () => {
   const { user } = useAuth();
@@ -23,15 +24,48 @@ const AIAssessment = () => {
     }
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      const docRef = doc(db, 'aiAnalysis', user.uid);
-      const unsubscribe = onSnapshot(docRef, (snap) => {
-        if (snap.exists()) setAnalysis(snap.data());
-      });
-      return () => unsubscribe();
+  const [generating, setGenerating] = useState(false);
+
+  const loadLatestReport = async () => {
+    if (!user) return;
+    try {
+      const { data: pRec } = await supabase.from('patients').select('id').eq('user_id', user.uid).maybeSingle();
+      if (pRec) {
+        const { data } = await supabase
+          .from('medical_reports')
+          .select('report_data')
+          .eq('patient_id', pRec.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        
+        if (data && data.length > 0) {
+          setAnalysis(data[0].report_data);
+        }
+      }
+    } catch (e) {
+      console.error(e);
     }
+  };
+
+  useEffect(() => {
+    loadLatestReport();
   }, [user]);
+
+  const generateNewReport = async () => {
+    if (!user) return;
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/report/${user.uid}`);
+      const result = await res.json();
+      if (result.success) {
+        setAnalysis(result.data);
+      }
+    } catch (err) {
+      console.error("Failed to generate report", err);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden relative font-sans text-slate-900">
@@ -50,7 +84,7 @@ const AIAssessment = () => {
              >
                <Bot className="w-5 h-5 md:w-6 md:h-6" />
              </button>
-             <div className="flex items-center gap-2 md:gap-3">
+              <div className="flex items-center gap-2 md:gap-3">
                 <div className="hidden sm:block p-2 text-white bg-accent-maroon rounded-xl md:rounded-2xl shadow-lg shadow-accent-maroon/20">
                   <Bot className="w-5 h-5" />
                 </div>
@@ -60,6 +94,14 @@ const AIAssessment = () => {
                 </div>
              </div>
           </div>
+          <button 
+            onClick={generateNewReport} 
+            disabled={generating}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 disabled:opacity-50 transition-colors"
+          >
+            <Activity className="w-4 h-4" />
+            {generating ? 'Analyzing...' : 'Generate New Report'}
+          </button>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-12">
@@ -105,7 +147,7 @@ const AIAssessment = () => {
                          <div className="flex-1 space-y-5 text-center md:text-left">
                             <div>
                                <p className="text-[8px] md:text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 md:mb-2">Clinical Interpretation</p>
-                               <p className="text-sm md:text-lg font-medium text-slate-800 leading-snug md:leading-tight">{analysis?.interpretation || 'Awaiting synchronization with clinical devices for real-time risk assessment.'}</p>
+                               <p className="text-sm md:text-lg font-medium text-slate-800 leading-snug md:leading-tight">{analysis?.currentVitalsAnalysis || analysis?.interpretation || 'Awaiting synchronization with clinical devices for real-time risk assessment.'}</p>
                             </div>
                             <div className="grid grid-cols-2 gap-3 md:gap-4">
                                <div className="p-2.5 md:p-4 bg-slate-50/50 rounded-xl md:rounded-2xl border border-slate-100">
@@ -114,7 +156,7 @@ const AIAssessment = () => {
                                </div>
                                <div className="p-2.5 md:p-4 bg-slate-50/50 rounded-xl md:rounded-2xl border border-slate-100">
                                   <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 md:mb-1">Last Updated</p>
-                                  <p className="text-xs md:text-sm font-bold text-slate-900">{analysis?.timestamp?.toDate ? analysis.timestamp.toDate().toLocaleDateString() : 'Real-time'}</p>
+                                  <p className="text-xs md:text-sm font-bold text-slate-900">{analysis?.generatedAt ? new Date(analysis.generatedAt).toLocaleDateString() : (analysis?.timestamp?.toDate ? analysis.timestamp.toDate().toLocaleDateString() : 'Real-time')}</p>
                                </div>
                             </div>
                          </div>

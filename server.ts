@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref as rtdbRef, set as rtdbSet } from "firebase/database";
+import { getDatabase, ref as rtdbRef, set as rtdbSet, get as rtdbGet } from "firebase/database";
 import { getFirestore, doc as fsDoc, setDoc as fsSetDoc } from "firebase/firestore";
 import { 
   cleanECGSignal, 
@@ -20,6 +20,7 @@ import { checkEmergencyCondition } from "./backend/services/emergencyService";
 import { TelemetryIngestionService } from "./backend/services/telemetryIngestion";
 import { EscalationEngine } from "./backend/services/escalationEngine";
 import { EmergencyDispatchService } from "./backend/services/emergencyDispatch";
+import { getWhatsAppTemplate, getVoiceTwiML } from "./backend/services/notificationTemplates";
 
 dotenv.config();
 
@@ -51,6 +52,13 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // CORS Middleware
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
+  });
 
   // Initialize Supabase server connection (using Service Role Key if available to bypass RLS)
   const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
@@ -112,7 +120,9 @@ async function startServer() {
         alertReason: is_emergency ? "Critical Vitals" : "Optimal",
         timestamp: Date.now(),
         fingerDetected: true,
-        leadsOff: false
+        leadsOff: false,
+        deviceStatus: "connected",
+        sampleCount: 1
       };
 
       if (rtdb) {
@@ -178,7 +188,7 @@ async function startServer() {
           if (alertData && alertData[0]) {
             checkEmergencyCondition(supabase, alertData[0], {
               heart_rate: hr, spo2: o2, temperature: temp
-            }, 'Excellent').catch(e => console.error('[EmergencyService] dispatch failed:', e));
+            }, 'Excellent', rtdb).catch(e => console.error('[EmergencyService] dispatch failed:', e));
           }
         }
       } else {
@@ -224,12 +234,47 @@ async function startServer() {
       const twilioLib = twilio as any;
       const client = twilioLib.default ? twilioLib.default(config.accountSid, config.authToken) : twilio(config.accountSid, config.authToken);
 
-      const nameVal = patientName || "John Doe";
-      const hrVal = heartRate || 42;
-      const spo2Val = spo2 || 82;
-      const tempVal = temp || 39;
+      // Fetch location from Firebase RTDB
+      let patientLocation = { lat: 0, lng: 0 };
+      if (rtdb) {
+        try {
+          const locSnap = await rtdbGet(rtdbRef(rtdb, `/patientLocations/${patientId}`));
+          if (locSnap.exists()) {
+            const locData = locSnap.val();
+            patientLocation = { lat: locData.latitude, lng: locData.longitude };
+          }
+        } catch (e) {
+          console.error("[FIREBASE] Location fetch error:", e);
+        }
+      }
 
-      const messageContent = `🚨 EMERGENCY ALERT 🚨\n\nPatient is in critical condition.\n\nPatient Name: ${nameVal}\nHeart Rate: ${hrVal} BPM\nSPO2: ${spo2Val}%\nTemperature: ${tempVal}°C\nStatus: HIGH RISK\n\nImmediate medical attention required.`;
+      // Fetch patient profile from Supabase
+      const { data: patientRow } = await supabase.from('patients').select('date_of_birth, gender, blood_group, medical_notes').eq('user_id', patientId).maybeSingle();
+      
+      const calcAge = (dob: any) => {
+        if (!dob) return "Unknown";
+        return Math.abs(new Date(Date.now() - new Date(dob).getTime()).getUTCFullYear() - 1970);
+      };
+
+      const patientDetails = {
+        name: patientName || "John Doe",
+        age: calcAge(patientRow?.date_of_birth),
+        gender: patientRow?.gender || "Unknown",
+        bloodGroup: patientRow?.blood_group || "Unknown",
+        location: (patientLocation.lat !== 0) ? "GPS Location Acquired" : "Unknown",
+        latitude: patientLocation.lat !== 0 ? patientLocation.lat : undefined,
+        longitude: patientLocation.lng !== 0 ? patientLocation.lng : undefined,
+        medicalNotes: patientRow?.medical_notes || "No notes"
+      };
+
+      const vitalsDetails = {
+        heartRate: heartRate || 42,
+        spo2: spo2 || 82,
+        temperature: temp || 39,
+        timestamp: new Date().toLocaleTimeString()
+      };
+
+      const messageContent = getWhatsAppTemplate(patientDetails, vitalsDetails);
 
       const toFamily = `whatsapp:${process.env.EMERGENCY_FAMILY_NUMBER || ""}`;
       const toAmbulance = `whatsapp:${process.env.EMERGENCY_AMBULANCE_NUMBER || ""}`;
@@ -283,11 +328,32 @@ async function startServer() {
 
       console.log(`[TWILIO VOICE] Calling Ambulance at ${formattedTo}...`);
 
-      const targetTwiml = `<Response>
-        <Say voice="alice" loop="2">
-          Emergency alert from Heart Sync Clinical Portal. Patient ${patientName || "identified"} is in critical status. Heart rate and parameters are severely out of limit. Immediate hospital ambulance dispatch requested. Please reply to acknowledge.
-        </Say>
-      </Response>`;
+      // Fetch location from Firebase RTDB
+      let patientLocation = { lat: 0, lng: 0 };
+      if (rtdb) {
+        try {
+          const locSnap = await rtdbGet(rtdbRef(rtdb, `/patientLocations/${patientId}`));
+          if (locSnap.exists()) {
+            const locData = locSnap.val();
+            patientLocation = { lat: locData.latitude, lng: locData.longitude };
+          }
+        } catch (e) {}
+      }
+
+      const patientDetails = {
+        name: patientName || "Unknown",
+        age: "Unknown",
+        location: (patientLocation.lat !== 0) ? `Coordinates ${patientLocation.lat.toFixed(4)}, ${patientLocation.lng.toFixed(4)}` : "Unknown"
+      };
+
+      const vitalsDetails = {
+        heartRate: "critical",
+        spo2: "critical",
+        temperature: "critical",
+        timestamp: new Date().toLocaleTimeString()
+      };
+
+      const targetTwiml = getVoiceTwiML(patientDetails, vitalsDetails);
 
       const twilioCall = await client.calls.create({
         twiml: targetTwiml,
@@ -727,6 +793,91 @@ async function startServer() {
     }
   });
 
+  // API ROUTE: AI Report Generation
+  app.get("/api/report/:patientId", async (req, res) => {
+    const { patientId } = req.params;
+    try {
+      // Fetch latest from Firebase
+      let liveReading = null;
+      if (rtdb) {
+        const snap = await rtdbGet(rtdbRef(rtdb, `/users/${patientId}/liveReading`));
+        if (snap.exists()) liveReading = snap.val();
+      }
+
+      // Fetch profile & history from Supabase
+      const { data: patientData } = await supabase.from('patients').select('id, profiles(full_name, email, phone)').eq('user_id', patientId).maybeSingle();
+      const patientRecordId = patientData?.id;
+      
+      let historyData = [];
+      let alertsData = [];
+      
+      if (patientRecordId) {
+        const { data: hd } = await supabase.from('vitals').select('*').eq('patient_id', patientRecordId).order('timestamp', { ascending: false }).limit(20);
+        const { data: ad } = await supabase.from('alerts').select('*').eq('patient_id', patientRecordId).order('created_at', { ascending: false }).limit(5);
+        historyData = hd || [];
+        alertsData = ad || [];
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+      if (!apiKey || apiKey === "placeholder" || apiKey.includes("YOUR_")) {
+        return res.status(500).json({ success: false, message: "Gemini API key not configured", data: null });
+      }
+
+      const ai = new GoogleGenAI({ 
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
+      
+      const prompt = `As a Cardiology AI Specialist, generate a detailed medical report.
+Patient Details: ${JSON.stringify(patientData?.profiles || {})}
+Current Vitals (Averaged/Live): ${JSON.stringify(liveReading || {})}
+Historical Data: ${JSON.stringify(historyData || [])}
+Emergency History: ${JSON.stringify(alertsData || [])}
+
+Generate a comprehensive JSON report containing exactly these keys:
+{
+  "patientSummary": "string",
+  "currentVitalsAnalysis": "string",
+  "bpmAnalysis": "string",
+  "spo2Analysis": "string",
+  "temperatureAnalysis": "string",
+  "ecgInterpretation": "string",
+  "riskLevel": "Low | Moderate | High",
+  "recommendations": ["rec1", "rec2"],
+  "riskScore": number
+}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
+      const reportJson = JSON.parse(response.text || "{}");
+      reportJson.patientId = patientId;
+      reportJson.generatedAt = new Date().toISOString();
+
+      // Save to Supabase
+      if (patientRecordId) {
+        await supabase.from('medical_reports').insert([{
+          patient_id: patientRecordId,
+          report_data: reportJson
+        }]);
+      }
+
+      return res.json({ success: true, message: "Report generated successfully", data: reportJson });
+    } catch (error: any) {
+      console.error("[Report Generation Error]:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to generate report", data: null });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -762,6 +913,82 @@ async function startServer() {
   const patientActiveWebSockets = new Map<string, any>();
   const ecgBuffers = new Map<string, number[]>();
   const alertStateTracker = new Map<string, { abnormalStartTime: number | null, lastReportedLevel: number }>();
+
+  const lastESP32Heartbeat = new Map<string, number>();
+  const sensorBuffer = new Map<string, any[]>();
+  const latestECGForBuffer = new Map<string, number[]>();
+
+  // 1. Device Disconnect Timeout (Every 5 seconds)
+  setInterval(() => {
+    const now = Date.now();
+    lastESP32Heartbeat.forEach((lastSeen, patientId) => {
+      if (now - lastSeen > 15000) {
+        if (rtdb) {
+          const liveReadingPayload = {
+            deviceStatus: "disconnected",
+            timestamp: now
+          };
+          rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("RTDB liveReading disconnect error:", e));
+          rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("RTDB livereading disconnect error:", e));
+        }
+        lastESP32Heartbeat.delete(patientId);
+        sensorBuffer.delete(patientId);
+        console.log(`[WEBSOCKET] Patient ${patientId} device disconnected (Timeout).`);
+      }
+    });
+  }, 5000);
+
+  // 2. 15-second Averaging Process
+  setInterval(() => {
+    sensorBuffer.forEach((buffer, patientId) => {
+      if (buffer.length === 0) return;
+
+      let sumBpm = 0, sumSpo2 = 0, sumTemp = 0, sumHumid = 0;
+      let validBpmCount = 0, validSpo2Count = 0, validTempCount = 0, validHumidCount = 0;
+
+      buffer.forEach((b: any) => {
+        if (b.bpm > 0) { sumBpm += b.bpm; validBpmCount++; }
+        if (b.spo2 > 0) { sumSpo2 += b.spo2; validSpo2Count++; }
+        if (b.temp > 0) { sumTemp += b.temp; validTempCount++; }
+        if (b.humid > 0) { sumHumid += b.humid; validHumidCount++; }
+      });
+
+      const avgBpm = validBpmCount > 0 ? Math.round(sumBpm / validBpmCount) : 0;
+      const avgSpo2 = validSpo2Count > 0 ? Math.round(sumSpo2 / validSpo2Count) : 0;
+      const avgTemp = validTempCount > 0 ? Number((sumTemp / validTempCount).toFixed(1)) : 0;
+      const avgHumid = validHumidCount > 0 ? Math.round(sumHumid / validHumidCount) : 0;
+
+      const latestECG = latestECGForBuffer.get(patientId) || [512];
+      const lastEntry = buffer[buffer.length - 1];
+
+      const liveReadingPayload = {
+        bpm: avgBpm,
+        heartRate: avgBpm,
+        spo2: avgSpo2,
+        temperature: avgTemp,
+        humidity: avgHumid,
+        ecg: latestECG,
+        sampleCount: buffer.length,
+        deviceStatus: "connected",
+        timestamp: Date.now(),
+        status: lastEntry.status || "Normal",
+        alertLevel: lastEntry.alertLevel || 1,
+        alertReason: lastEntry.alertReason || "Optimal",
+        classification: lastEntry.classification || "Unknown",
+        confidence: lastEntry.confidence || 0,
+        fingerDetected: lastEntry.fingerDetected,
+        leadsOff: lastEntry.leadsOff
+      };
+
+      if (rtdb) {
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("RTDB average write error:", e));
+        rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("RTDB average write error:", e));
+        rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("RTDB liveHealthMetrics average error:", e));
+      }
+      
+      sensorBuffer.set(patientId, []);
+    });
+  }, 15000);
 
   // ── Supabase Batch Queue ────────────────────────────────────────────────────
   // High-frequency telemetry (1 packet/sec) is batched in memory and flushed
@@ -808,6 +1035,7 @@ async function startServer() {
           if (!patientId) return;
 
           associatedPatientId = patientId;
+          lastESP32Heartbeat.set(patientId, Date.now());
 
           const hr = Number(bpm ?? 0);
           const o2 = Number(spo2 ?? 0);
@@ -936,31 +1164,11 @@ async function startServer() {
             console.warn(`[WS] Patient "${patientId}" not in DB — skipping Supabase vitals write. Firebase streaming active.`);
           }
 
-          // ── Firebase RTDB: Metrics only (NO raw ECG array) ──────────────────
-          // ECG waveform is delivered directly via WebSocket broadcast below.
-          // Storing large ECG arrays in Firebase causes storage bloat and
-          // increased read latency on the dashboard. Only scalar metrics go here.
-          if (rtdb) {
-            const liveReadingPayload = {
-              bpm: hr,
-              heartRate: hr,
-              spo2: o2,
-              temperature: temp,
-              humidity: humid,
-              // ecg intentionally omitted — waveform delivered via WS broadcast
-              status,
-              alertLevel,
-              alertReason,
-              classification: classification.prediction,
-              confidence: classification.confidenceScore,
-              timestamp: Date.now(),
-              fingerDetected,
-              leadsOff
-            };
-            rtdbSet(rtdbRef(rtdb, `/users/${patientId}/liveReading`), liveReadingPayload).catch(e => console.error("RTDB liveReading error:", e));
-            rtdbSet(rtdbRef(rtdb, `/users/${patientId}/livereading`), liveReadingPayload).catch(e => console.error("RTDB livereading error:", e));
-            rtdbSet(rtdbRef(rtdb, `/liveHealthMetrics/${patientId}`), liveReadingPayload).catch(e => console.error("RTDB liveHealthMetrics error:", e));
-          }
+          // ── Buffer for 15-second Averaging Process ──────────────────
+          const existingBuffer = sensorBuffer.get(patientId) || [];
+          existingBuffer.push({ bpm: hr, spo2: o2, temp, humid, status, alertLevel, alertReason, fingerDetected, leadsOff, classification: classification.prediction, confidence: classification.confidenceScore });
+          sensorBuffer.set(patientId, existingBuffer);
+          latestECGForBuffer.set(patientId, finalEcg);
 
           // ── Firestore: Scalar vitals only (already no ECG — keep as-is) ─────
           if (firestore) {
@@ -1003,7 +1211,7 @@ async function startServer() {
               if (alertData && alertData[0]) {
                 checkEmergencyCondition(supabase, alertData[0], {
                   heart_rate: hr, spo2: o2, temperature: temp
-                }, quality.rating).catch(e => console.error('Emergency dispatch failed:', e));
+                }, quality.rating, rtdb).catch(e => console.error('Emergency dispatch failed:', e));
               }
             }
           }
@@ -1047,9 +1255,35 @@ async function startServer() {
         patientActiveWebSockets.delete(associatedPatientId);
         ecgBuffers.delete(associatedPatientId);
         alertStateTracker.delete(associatedPatientId);
-        
-        // Zero-Fake-Data offline cleanup
-        console.log("Patient WS disconnected, resources cleaned up:", associatedPatientId);
+        lastESP32Heartbeat.delete(associatedPatientId);
+        sensorBuffer.delete(associatedPatientId);
+        latestECGForBuffer.delete(associatedPatientId);
+
+        // --- CRITICAL: Write disconnected status to Firebase RTDB immediately ---
+        // This allows the frontend 3s watchdog to trigger without waiting for timeout
+        if (rtdb) {
+          const disconnectedPayload = {
+            bpm: 0,
+            heartRate: 0,
+            spo2: 0,
+            temperature: 0,
+            humidity: 0,
+            ecg: [512],
+            status: "Disconnected",
+            alertLevel: 0,
+            alertReason: "Device Offline",
+            timestamp: Date.now(),
+            fingerDetected: false,
+            leadsOff: true,
+            deviceStatus: "disconnected",
+            sampleCount: 0
+          };
+          rtdbSet(rtdbRef(rtdb, `/users/${associatedPatientId}/liveReading`), disconnectedPayload)
+            .then(() => console.log(`[FIREBASE] Wrote deviceStatus=disconnected for patient ${associatedPatientId}`))
+            .catch((e: any) => console.error("[FIREBASE] Failed to write disconnect status:", e));
+        }
+
+        console.log(`[WEBSOCKET] Patient ${associatedPatientId} disconnected, all resources cleaned.`);
       }
     });
   });

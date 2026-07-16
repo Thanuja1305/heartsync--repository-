@@ -178,75 +178,10 @@ const DoctorDashboard = () => {
   useEffect(() => { if (profile !== null && profile?.role !== 'doctor') navigate('/'); }, [profile, navigate]);
 
   useEffect(() => {
-    const isDemo = localStorage.getItem('demo_mode') === 'doctor' || !user?.uid || !db.app.options.apiKey || db.app.options.apiKey.includes('mock-api-key');
-
-    if (isDemo) {
-      setIsDemoMode(true);
-      const demoPatients = [
-        {
-          id: 'demo-patient-001',
-          displayName: 'Sarah Jenkins',
-          fullName: 'Sarah Jenkins',
-          age: 38,
-          gender: 'Female',
-          bloodGroup: 'O-Positive',
-          phone: '+1 (555) 048-1920',
-          emergencyContact: 'Robert Jenkins (Spouse)',
-          emergencyPhone: '+1 (555) 048-1921',
-          status: 'approved'
-        },
-        {
-          id: 'demo-patient-002',
-          displayName: 'Marcus Aurelius',
-          fullName: 'Marcus Aurelius',
-          age: 62,
-          gender: 'Male',
-          bloodGroup: 'A-Negative',
-          phone: '+1 (555) 890-4821',
-          emergencyContact: 'Faustina (Wife)',
-          emergencyPhone: '+1 (555) 890-4822',
-          status: 'approved'
-        }
-      ];
-      setPatients(demoPatients);
-      setSelectedId(prev => prev ?? demoPatients[0].id);
+    if (!user?.uid) {
       setLoading(false);
-
-      // Sim updates
-      const interval = setInterval(() => {
-        const updatedVitals: Record<string, VitalsRecord> = {};
-        demoPatients.forEach(p => {
-          const isCritical = p.id === 'demo-patient-002' && Math.random() > 0.85;
-          const isWarning = !isCritical && Math.random() > 0.7;
-          const hr = isCritical ? 145 : isWarning ? 105 : Math.round(65 + Math.random() * 20);
-          const spo2 = isCritical ? 88 : Math.round(96 + Math.random() * 4);
-          const temp = Number((36.4 + Math.random() * 1.2).toFixed(1));
-          
-          updatedVitals[p.id] = {
-            heartRate: hr,
-            bpm: hr,
-            o2: spo2,
-            temp: temp,
-            humidity: 50,
-            isEmergency: isCritical,
-            fingerDetected: true,
-            leadsOff: false,
-            lastSeen: Date.now(),
-            ecg: Array(40).fill(0).map(() => Math.floor(400 + Math.random() * 100))
-          };
-        });
-        setVitalsMap(prev => ({ ...prev, ...updatedVitals }));
-      }, 1500);
-
-      // Simple mock timeline
-      setAlerts([
-        { id: '1', patientId: 'demo-patient-002', patientName: 'Marcus Aurelius', severity: 'critical', message: 'Cardiac anomaly detected: HR 145, SpO2 88%', detectedAt: Date.now(), acknowledged: false, emergency: true }
-      ]);
-
-      return () => clearInterval(interval);
+      return;
     }
-
-    if (!user?.uid) return;
     const qP = query(collection(db, 'users'), where('role', '==', 'patient'), where('status', '==', 'approved'), limit(50));
     const unsubP = onSnapshot(qP, snap => {
       const pts = snap.docs.map(d => ({ id: d.id, ...d.data() } as PatientRecord));
@@ -333,10 +268,9 @@ const DoctorDashboard = () => {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (!isSimulating || !selectedId) return;
-    const stop = startIoTSimulation(selectedId);
-    return () => stop();
-  }, [isSimulating, selectedId]);
+    // startIoTSimulation is permanently disabled in production.
+    // Real data is only from ESP32 hardware via WebSocket.
+  }, [selectedId]);
 
   const selectedPatient = useMemo(() => patients.find(p => p.id === selectedId), [patients, selectedId]);
   const selectedVitals = useMemo(() => vitalsMap[selectedId || ''], [vitalsMap, selectedId]);

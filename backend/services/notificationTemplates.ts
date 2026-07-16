@@ -4,6 +4,8 @@ export interface PatientDetails {
   gender?: string;
   bloodGroup?: string;
   location?: string;
+  latitude?: number;
+  longitude?: number;
   medicalNotes?: string;
 }
 
@@ -15,26 +17,32 @@ export interface VitalsDetails {
 }
 
 export function getWhatsAppTemplate(patient: PatientDetails, vitals: VitalsDetails): string {
-  return `*HEARTSYNC EMERGENCY ALERT*\n\n` +
+  const mapsLink = patient.latitude && patient.longitude 
+    ? `\nGPS Location: https://www.google.com/maps?q=${patient.latitude},${patient.longitude}` 
+    : '';
+
+  return `*🚨 HEARTSYNC EMERGENCY ALERT 🚨*\n\n` +
     `Patient: ${patient.name}\n` +
     `Age/Gender: ${patient.age} / ${patient.gender || 'Unknown'}\n` +
     `Blood Group: ${patient.bloodGroup || 'Unknown'}\n` +
-    `Location: ${patient.location || 'Hyderabad Hub (Standard Hub Zone)'}\n` +
+    `Location: ${patient.location || 'Unknown'}${mapsLink}\n` +
     `Medical Notes: ${patient.medicalNotes || 'No notes'}\n\n` +
-    `Critical condition detected.\n\n` +
+    `CRITICAL condition detected.\n\n` +
     `Current readings:\n` +
     `- Heart Rate: ${vitals.heartRate} BPM\n` +
     `- SpO2: ${vitals.spo2}%\n` +
     `- Temperature: ${vitals.temperature}°C\n` +
     `- Time: ${vitals.timestamp}\n\n` +
-    `Doctor has been notified.\n` +
-    `Please contact emergency services immediately.`;
+    `Immediate medical attention required!`;
 }
 
 export function getSMSTemplate(patient: PatientDetails, vitals: VitalsDetails): string {
+  const mapsLink = patient.latitude && patient.longitude 
+    ? ` GPS: https://www.google.com/maps?q=${patient.latitude},${patient.longitude}` 
+    : '';
   return `HEARTSYNC EMERGENCY: Critical status detected for ${patient.name} (${patient.age}y). ` +
     `HR: ${vitals.heartRate} BPM, SpO2: ${vitals.spo2}%, Temp: ${vitals.temperature}°C. ` +
-    `Location: ${patient.location || 'Hyderabad Hub'}. Immediate dispatch required.`;
+    `Loc: ${patient.location || 'Unknown'}.${mapsLink} Immediate dispatch required.`;
 }
 
 export function getVoiceTwiML(patient: PatientDetails, vitals: VitalsDetails): string {

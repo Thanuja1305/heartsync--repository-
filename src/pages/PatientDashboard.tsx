@@ -240,7 +240,7 @@ const PatientDashboard = () => {
                     ) : (
                       <span className="text-xs font-semibold text-slate-400">Place finger</span>
                     )
-                  ) : '--'}
+                  ) : <span className="text-sm font-semibold text-slate-400">Disconnected</span>}
                 </div>
                 <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded mt-1 inline-block">Live Reading</span>
               </div>
@@ -264,7 +264,7 @@ const PatientDashboard = () => {
                     ) : (
                       <span className="text-xs font-semibold text-slate-400">Place finger</span>
                     )
-                  ) : '--'}
+                  ) : <span className="text-sm font-semibold text-slate-400">Disconnected</span>}
                 </div>
                 <span className="text-[8px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mt-1 inline-block">Oxygen Saturation</span>
               </div>
@@ -288,7 +288,7 @@ const PatientDashboard = () => {
                     ) : (
                       <span className="text-xs font-semibold text-slate-400">No reading</span>
                     )
-                  ) : '--'}
+                  ) : <span className="text-sm font-semibold text-slate-400">Disconnected</span>}
                 </div>
                 <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-1 inline-block">Body Temperature</span>
               </div>

@@ -250,6 +250,54 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
       const height = canvas.height;
       const centerY = height / 2;
 
+      // PRODUCTION WATCHDOG: If device is disconnected, stop all rendering, clear buffer and show critical overlay
+      if (isConnected === false) {
+        // Drain the ECG queue to prevent stale data rendering on reconnect
+        sampleQueueRef.current = [];
+        landmarkLabelsRef.current = [];
+        phaseRef.current = 0;
+        // Fill all points with flat baseline (centerY)
+        pointsRef.current = new Array(width).fill(centerY);
+
+        // Draw dark background
+        ctx.fillStyle = '#1A1A1A';
+        ctx.fillRect(0, 0, width, height);
+
+        // Draw flat baseline
+        ctx.save();
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.4)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(width, centerY);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw disconnected overlay
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(0, 0, width, height);
+
+        // Critical icon
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 20px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚠', width / 2, centerY - 32);
+
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText('DEVICE DISCONNECTED', width / 2, centerY - 8);
+
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.7)';
+        ctx.font = '11px monospace';
+        ctx.fillText('NO LIVE SIGNAL', width / 2, centerY + 14);
+        ctx.restore();
+
+        animationId = requestAnimationFrame(draw);
+        return;
+      }
+
       // Realtime tracing shifts points only if not paused
       if (!isPaused) {
         // Scroll speed (150 pixels per second)
@@ -297,32 +345,38 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
             let scaledDeviation = normalizedY * 82;
             targetY = centerY - scaledDeviation;
           } else if (isStringEcg || bpm > 0) {
-            // 2. SIMULATED ECG GENERATOR: Draw heartbeat synchronized with active BPM and classification
-            const simResult = getSimulatedPQRSTValue(phaseRef.current, centerY);
-            targetY = simResult.y;
-            landmarkStr = simResult.landmark;
-            
-            // Calculate dynamic arrhythmia speeds
-            let effectiveBpm = bpm || 72;
-            if (/arrhythmia|irregular|sinus_arrhythmia|ectopic/i.test(ecgStatus)) {
-              if (phaseRef.current === 0) {
-                currentBpmRef.current = (bpm || 72) * (0.65 + Math.random() * 0.7);
-              }
-              effectiveBpm = currentBpmRef.current;
-            } else if (/tachycardia/i.test(ecgStatus)) {
-              effectiveBpm = Math.max(bpm, 115);
-            } else if (/bradycardia/i.test(ecgStatus)) {
-              effectiveBpm = Math.min(bpm, 45);
+            // 2. SIMULATED ECG GENERATOR (only used when string status provided by server, NOT when disconnected)
+            // Safety gate: never simulate if isConnected is explicitly false
+            if (isConnected === false) {
+              targetY = centerY;
             } else {
-              effectiveBpm = bpm || 72;
-            }
+              const simResult = getSimulatedPQRSTValue(phaseRef.current, centerY);
+              targetY = simResult.y;
+              landmarkStr = simResult.landmark;
 
-            const adjustedBeatIntervalSec = effectiveBpm > 0 ? 60 / effectiveBpm : 1.0;
-            const adjustedPhaseIncrement = timePerPixel / adjustedBeatIntervalSec;
+              // Calculate dynamic speeds
+              let effectiveBpm = bpm || 72;
+              if (/arrhythmia|irregular|sinus_arrhythmia|ectopic/i.test(ecgStatus)) {
+                if (phaseRef.current === 0) {
+                  // Use last known bpm with fixed variation, not Math.random for production
+                  currentBpmRef.current = bpm * 0.9;
+                }
+                effectiveBpm = currentBpmRef.current;
+              } else if (/tachycardia/i.test(ecgStatus)) {
+                effectiveBpm = Math.max(bpm, 115);
+              } else if (/bradycardia/i.test(ecgStatus)) {
+                effectiveBpm = Math.min(bpm, 45);
+              } else {
+                effectiveBpm = bpm || 72;
+              }
 
-            phaseRef.current = phaseRef.current + adjustedPhaseIncrement;
-            if (phaseRef.current >= 1.0) {
-              phaseRef.current = 0;
+              const adjustedBeatIntervalSec = effectiveBpm > 0 ? 60 / effectiveBpm : 1.0;
+              const adjustedPhaseIncrement = timePerPixel / adjustedBeatIntervalSec;
+
+              phaseRef.current = phaseRef.current + adjustedPhaseIncrement;
+              if (phaseRef.current >= 1.0) {
+                phaseRef.current = 0;
+              }
             }
           } else {
             // 3. NO SIGNAL: Draw a completely flat, plain line
@@ -534,7 +588,7 @@ const ECGGraph: React.FC<ECGGraphProps> = ({ bpm: rawBpm, liveEcg, spo2, classif
       cancelAnimationFrame(animationId);
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, [bpm, hasSignal, hasEcgValues, isPaused, zoom, panOffset, isFullscreen]);
+  }, [bpm, hasSignal, hasEcgValues, isPaused, zoom, panOffset, isFullscreen, isConnected]);
 
   const toggleFullscreen = () => {
     setIsFullscreen(!isFullscreen);
